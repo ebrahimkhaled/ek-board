@@ -441,12 +441,19 @@ document.addEventListener('keydown', (e) => {
 let touchStartX = 0;
 let touchStartY = 0;
 document.addEventListener('touchstart', (e) => {
-  touchStartX = e.touches[0].clientX;
-  touchStartY = e.touches[0].clientY;
+  if (e.touches.length !== 1) return;
+  const t = e.touches[0];
+  if (t.touchType === 'stylus') return; // IGNORING APPLE PENCIL
+  touchStartX = t.clientX;
+  touchStartY = t.clientY;
 });
 document.addEventListener('touchend', (e) => {
-  const dx = e.changedTouches[0].clientX - touchStartX;
-  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (e.changedTouches.length !== 1) return;
+  const t = e.changedTouches[0];
+  if (t.touchType === 'stylus') return; // IGNORING APPLE PENCIL
+  
+  const dx = t.clientX - touchStartX;
+  const dy = t.clientY - touchStartY;
   // Only swipe if horizontal movement is dominant
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
     if (dx < 0 && state.stepCtrl) state.stepCtrl.next();
