@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📓 EK-Board — Interactive Notebook</title>
+  <meta name="description" content="Interactive step-by-step exercise notebook with handwriting animation — by Dr. Ebrahim Khaled">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📓</text></svg>">
+  
+  <!-- KaTeX for math rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+
+  <!-- Top progress bar -->
+  <div class="top-progress">
+    <div class="top-progress-fill" id="topProgressFill" style="width:0%"></div>
+  </div>
+
+  <!-- Menu toggle -->
+  <button class="menu-toggle" id="menuToggle" title="Exercise List (Esc to close)">☰</button>
+
+  <!-- Navigation Sidebar -->
+  <nav class="exercise-nav" id="exerciseNav">
+    <div class="nav-header">
+      <div class="nav-brand">📓 EK-Board</div>
+    </div>
+    <div class="nav-chapters" id="navChapters">
+      <!-- Chapters rendered dynamically -->
+    </div>
+  </nav>
+
+  <!-- The Notebook -->
+  <div class="notebook" id="notebookContent">
+    <!-- Steps are rendered here dynamically -->
+  </div>
+
+  <!-- Controls Bar -->
+  <div class="controls-bar">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <button class="btn" id="btnMenu">☰</button>
+      <span class="exercise-label" id="exerciseLabel">—</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span class="info" id="stepInfo">Step 0 / 0</span>
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+      </div>
+    </div>
+    <div class="info controls-keys">
+      <kbd>Click</kbd> or <kbd>→</kbd> next &nbsp;
+      <kbd>←</kbd> back &nbsp;
+      <kbd>R</kbd> reset
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

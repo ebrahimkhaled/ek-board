@@ -1,0 +1,720 @@
+/* ═══════════════════════════════════════════════════════
+   style.css — Notebook Paper Design + Pen Colors
+   ═══════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Caveat:wght@400;600;700&family=Inter:wght@400;600;700&display=swap');
+
+:root {
+  /* Paper */
+  --paper-bg: #fefef6;
+  --grid-color: rgba(180, 210, 235, 0.35);
+  --grid-size: 32px;
+  --margin-red: rgba(200, 80, 80, 0.35);
+  --desk-bg: #c4b89a;
+
+  /* Pen Colors */
+  --pen-black: #1a1a1a;
+  --pen-red: #c41e3a;
+  --pen-blue: #1a5276;
+  --pen-green: #1e8449;
+  --pen-pencil: #8e8e8e;
+
+  /* Highlighter */
+  --hl-yellow: rgba(255, 245, 100, 0.45);
+
+  /* Fonts */
+  --font-hand: 'Patrick Hand', cursive;
+  --font-header: 'Caveat', cursive;
+  --font-ui: 'Inter', sans-serif;
+
+  /* Sizing */
+  --line-height: 34px;
+  --margin-left: 80px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-hand);
+  background: var(--desk-bg);
+  background-image: 
+    radial-gradient(ellipse at 30% 20%, rgba(160, 140, 100, 0.3) 0%, transparent 70%),
+    radial-gradient(ellipse at 70% 80%, rgba(140, 120, 80, 0.2) 0%, transparent 70%);
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 20px 80px;
+  user-select: none;
+  cursor: pointer;
+}
+
+/* ═══ NOTEBOOK PAGE ═══ */
+.notebook {
+  width: 820px;
+  min-height: 85vh;
+  background: var(--paper-bg);
+  border-radius: 2px;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 28px 40px 60px var(--margin-left);
+  max-height: calc(100vh - 80px);
+
+  /* Shadows for depth */
+  box-shadow:
+    4px 4px 20px rgba(0,0,0,0.18),
+    -2px -2px 8px rgba(0,0,0,0.05),
+    inset 0 0 80px rgba(0,0,0,0.02);
+
+  /* Grid lines + RED MARGIN LINE (in background so it covers full scroll height) */
+  background-image:
+    /* Red margin line — extends full content height because it's in background */
+    linear-gradient(90deg,
+      transparent 67px, var(--margin-red) 67px,
+      var(--margin-red) 69px, transparent 69px),
+    /* Horizontal lines */
+    repeating-linear-gradient(0deg,
+      transparent, transparent calc(var(--grid-size) - 1px),
+      var(--grid-color) calc(var(--grid-size) - 1px), var(--grid-color) var(--grid-size)),
+    /* Vertical lines */
+    repeating-linear-gradient(90deg,
+      transparent, transparent calc(var(--grid-size) - 1px),
+      var(--grid-color) calc(var(--grid-size) - 1px), var(--grid-color) var(--grid-size));
+  background-size: 100% 100%, var(--grid-size) var(--grid-size), var(--grid-size) var(--grid-size);
+  background-position: 0 0, 0 20px, 0 20px;
+  background-color: var(--paper-bg);
+}
+
+/* Hide scrollbar */
+.notebook::-webkit-scrollbar { width: 0; }
+
+/* Spiral holes */
+.notebook::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  bottom: 0;
+  width: 36px;
+  background-image: radial-gradient(circle 7px, var(--desk-bg) 100%, transparent 100%);
+  background-size: 36px 64px;
+  background-position: center 16px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ═══ LINE ELEMENTS ═══ */
+.line {
+  opacity: 0;
+  transform: translateX(-6px);
+  transition: opacity 0.5s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  min-height: var(--line-height);
+  display: flex;
+  align-items: center;
+  font-size: 1.2rem;
+  line-height: var(--line-height);
+  position: relative;
+  padding: 2px 0;
+  flex-wrap: wrap;
+}
+
+.line.visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Writing animation — clip left to right */
+.line.visible .writing {
+  animation: writeIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes writeIn {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+
+/* Question box: use fade instead of clip (clip breaks inside bordered container) */
+.question-box-line.visible .question-box .writing {
+  animation: fadeWrite 0.6s ease forwards;
+  clip-path: none;
+}
+@keyframes fadeWrite {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ═══ PEN COLORS ═══ */
+.black   { color: var(--pen-black); }
+.red     { color: var(--pen-red); }
+.blue    { color: var(--pen-blue); }
+.green   { color: var(--pen-green); }
+.pencil  { color: var(--pen-pencil); font-style: italic; font-size: 1.05rem; }
+
+/* ═══ LINE TYPES ═══ */
+
+/* Title (Exercise header) */
+.title {
+  font-family: var(--font-header);
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--pen-blue);
+  text-decoration: underline;
+  text-decoration-color: var(--pen-red);
+  text-underline-offset: 6px;
+  text-decoration-thickness: 2px;
+  min-height: 52px;
+  margin-bottom: 12px;
+  margin-top: 10px;
+}
+
+/* Section headers (Solution parts) — spacing AFTER so student eyes rest */
+.section-header {
+  font-family: var(--font-header);
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--pen-red);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1.5px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+/* Bold lines (Rule titles etc.) — spacing AFTER for visual breathing room */
+.bold-line {
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+.bold-line strong {
+  font-weight: 700;
+}
+
+/* Math display */
+.math-center {
+  justify-content: center;
+  font-size: 1.3rem;
+  min-height: 44px;
+  padding: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Aligned math continuation (= on new line, indented) */
+.math-aligned {
+  justify-content: flex-start;
+  padding-left: 60px;
+  font-size: 1.3rem;
+  min-height: 40px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* First line of aligned block — not indented */
+.math-aligned-first {
+  justify-content: center;
+  font-size: 1.3rem;
+  min-height: 44px;
+  padding: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Question box */
+.question-box {
+  border: 2px dashed var(--pen-blue);
+  background: rgba(26, 82, 118, 0.04);
+  border-radius: 4px;
+  padding: 14px 18px;
+  margin: 8px 0;
+  width: 100%;
+  line-height: 1.7;
+  color: var(--pen-blue);
+  font-size: 1.1rem;
+  overflow: visible;
+}
+.question-box strong { color: var(--pen-red); }
+.question-box .writing { display: block; }
+
+.question-box-line {
+  min-height: auto;
+}
+
+/* Spacer */
+.spacer { min-height: 12px; }
+
+/* Checkmark circle */
+.check-circle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--pen-green); color: var(--pen-green);
+  font-size: 0.9rem; margin-left: 8px; font-weight: bold;
+}
+
+/* Yellow highlighter effect */
+.highlight {
+  background: var(--hl-yellow);
+  padding: 1px 4px; border-radius: 2px;
+}
+
+/* Boxed result */
+.boxed {
+  border: 2px solid var(--pen-red);
+  border-radius: 3px;
+  padding: 4px 14px;
+  display: inline-block;
+  background: rgba(196, 30, 58, 0.04);
+}
+
+/* ═══ NAVIGATION SIDEBAR ═══ */
+.exercise-nav {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 60px;
+  width: 300px;
+  background: #0f172a;
+  overflow-y: auto;
+  z-index: 100;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 4px 0 30px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+}
+.exercise-nav.open { transform: translateX(0); }
+
+/* Scrollbar for sidebar */
+.exercise-nav::-webkit-scrollbar { width: 4px; }
+.exercise-nav::-webkit-scrollbar-track { background: transparent; }
+.exercise-nav::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+/* Brand header */
+.nav-header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.nav-brand {
+  font-family: var(--font-header);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #f0fdf4;
+  letter-spacing: 0.5px;
+}
+
+/* Chapter group */
+.ch-group {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.ch-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+  color: #cbd5e1;
+}
+.ch-header:hover { background: rgba(255,255,255,0.04); }
+
+.ch-icon { font-size: 1.1rem; flex-shrink: 0; }
+.ch-title {
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 600;
+  flex: 1;
+  line-height: 1.3;
+}
+.ch-arrow {
+  font-size: 0.75rem;
+  color: #475569;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.ch-group.open .ch-arrow { transform: rotate(90deg); color: #0d9488; }
+.ch-group.open .ch-header { color: #e2e8f0; background: rgba(13, 148, 136, 0.06); }
+
+/* Exercise list (inside accordion) */
+.ch-group .ex-list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease;
+}
+.ch-group.open .ex-list {
+  max-height: 2000px;
+}
+
+.ex-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 10px 28px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-left: 3px solid transparent;
+}
+.ex-item:hover {
+  background: rgba(13, 148, 136, 0.06);
+}
+.ex-item.active {
+  background: rgba(13, 148, 136, 0.1);
+  border-left-color: #0d9488;
+}
+
+.ex-status {
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+.ex-name {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: #94a3b8;
+  flex: 1;
+  line-height: 1.3;
+}
+.ex-item.active .ex-name { color: #0d9488; font-weight: 600; }
+.ex-item:hover .ex-name { color: #e2e8f0; }
+
+.ex-pct {
+  font-family: var(--font-ui);
+  font-size: 0.65rem;
+  color: #475569;
+  background: rgba(13, 148, 136, 0.1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+/* ═══ CONTROLS BAR ═══ */
+.controls-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.97);
+  backdrop-filter: blur(12px);
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 100;
+  font-family: var(--font-ui);
+  border-top: 1px solid rgba(13, 148, 136, 0.12);
+  gap: 12px;
+}
+
+.controls-bar .info {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.controls-bar kbd {
+  background: #1e293b;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+}
+
+.controls-bar .btn {
+  background: #1e293b;
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  color: #e2e8f0;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.controls-bar .btn:hover {
+  border-color: #0d9488;
+  background: rgba(13, 148, 136, 0.12);
+}
+
+/* Exercise label in controls */
+.exercise-label {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  font-weight: 600;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Progress bar */
+.progress-track {
+  width: 140px;
+  height: 4px;
+  background: #1e293b;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0d9488, #10b981);
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+/* Top progress bar */
+.top-progress {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  z-index: 200;
+}
+.top-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0d9488, #10b981);
+  transition: width 0.3s ease;
+}
+
+/* Menu toggle button */
+.menu-toggle {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 101;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(13, 148, 136, 0.15);
+  color: #e2e8f0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: all 0.2s;
+  backdrop-filter: blur(8px);
+}
+.menu-toggle:hover { border-color: #0d9488; background: rgba(13, 148, 136, 0.15); }
+
+/* ═══ KATEX OVERRIDES ═══ */
+.katex-display {
+  margin: 4px 0 !important;
+}
+.katex { font-size: 1.1em !important; }
+
+/* ═══ ANNOTATION ENGINE ═══ */
+
+/* Canvas — lives inside notebook, covers full scroll content */
+.annotation-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Width/height set by JS to match scrollWidth/scrollHeight */
+  pointer-events: none;
+  z-index: 10;
+  touch-action: none;
+}
+
+/* Laser overlay — fixed to viewport, z-index BELOW toolbar so buttons remain clickable */
+.laser-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 140;  /* Below toolbar (150) so toolbar clicks still work */
+  display: none;
+}
+
+/* Laser beam fade animation */
+@keyframes beamFade {
+  0%   { opacity: 1; stroke-width: 2.5px; }
+  100% { opacity: 0; stroke-width: 0.5px; }
+}
+
+/* Floating Toolbar */
+.ann-toolbar {
+  position: fixed;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  z-index: 150;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(13, 148, 136, 0.15);
+  border-radius: 14px;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
+.ann-tool-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  color: #94a3b8;
+}
+.ann-tool-btn:hover {
+  background: rgba(255,255,255,0.08);
+}
+.ann-tool-btn.active {
+  background: rgba(13, 148, 136, 0.2);
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.3);
+}
+.ann-tool-btn.ann-clear {
+  margin-top: 4px;
+}
+.ann-mode-btn {
+  font-size: 0.85rem;
+  border: 1px solid rgba(13, 148, 136, 0.2);
+}
+.ann-mode-btn.active {
+  background: rgba(13, 148, 136, 0.25);
+  border-color: rgba(13, 148, 136, 0.5);
+}
+
+.ann-divider {
+  width: 24px;
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 4px 0;
+}
+
+/* Color dots */
+.ann-color-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  margin: 1px 0;
+}
+.ann-color-dot:hover {
+  transform: scale(1.2);
+}
+.ann-color-dot.active {
+  box-shadow: 0 0 0 2px #0f172a, 0 0 0 4px #0d9488;
+  transform: scale(1.15);
+}
+
+/* Size slider */
+.ann-size-slider {
+  width: 28px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: #0d9488;
+  cursor: pointer;
+  margin: 4px 0;
+  height: 60px;
+}
+
+/* ═══ CLOUD SYNC INDICATOR ═══ */
+.sync-indicator {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(15, 23, 42, 0.9);
+  color: #10b981;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  z-index: 300;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.sync-indicator.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ═══ PRESENTER MODE ═══ */
+
+/* Fullscreen body */
+body.fullscreen-mode {
+  background: #1a1a2e;
+  padding: 12px 20px 70px;
+}
+
+/* Notebook in presenter mode — wider with side margins for notes */
+.notebook.presenter-mode {
+  width: 900px;
+  max-height: calc(100vh - 70px);
+  transition: width 0.3s ease;
+}
+
+/* Zoom transition (CSS zoom reflows naturally, no transform needed) */
+.presenter-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+.zoom-label {
+  min-width: 38px;
+  text-align: center;
+  font-size: 0.7rem !important;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══ RESPONSIVE ═══ */
+@media (max-width: 900px) {
+  .notebook {
+    width: 100%;
+    padding-left: 60px;
+    padding-right: 20px;
+  }
+  .notebook::after { left: 6px; width: 28px; }
+  .exercise-nav { width: 85vw; }
+  .controls-keys { display: none; }
+  .exercise-label { max-width: 160px; }
+  .presenter-controls { display: none; }
+
+  .ann-toolbar {
+    top: auto;
+    bottom: 70px;
+    right: 8px;
+    transform: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    border-radius: 12px;
+    max-width: 90vw;
+    gap: 2px;
+  }
+  .ann-divider {
+    width: 1px;
+    height: 24px;
+    margin: 0 4px;
+  }
+  .ann-size-slider {
+    writing-mode: horizontal-tb;
+    direction: ltr;
+    width: 50px;
+    height: auto;
+  }
+}
