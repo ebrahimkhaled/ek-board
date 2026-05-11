@@ -70,6 +70,9 @@ export function shouldNavigate(pointerType) {
   return !(tool === 'pen' || tool === 'hl' || tool === 'eraser');
 }
 
+// Called to get current tool (for main.js)
+export function getCurrentTool() { return tool; }
+
 // ─── INIT ───
 export function initAnnotations(notebookEl) {
   notebook = notebookEl;
@@ -78,9 +81,11 @@ export function initAnnotations(notebookEl) {
   canvas = document.createElement('canvas');
   canvas.className = 'annotation-canvas';
   canvas.id = 'annotationCanvas';
-  // CRITICAL: touch-action:none gives us FULL control over all pointer events.
-  // Finger scroll is handled by NOT calling preventDefault() for touch pointers.
-  canvas.style.touchAction = 'none';
+  // touch-action: auto → browser handles finger scroll/pan natively.
+  // Pen input is claimed via preventDefault() in our pointerdown handler.
+  canvas.style.touchAction = 'auto';
+  // Always capture pointer events (for pen auto-activation)
+  canvas.style.pointerEvents = 'auto';
   notebook.appendChild(canvas);
 
   // Create laser SVG overlay
@@ -252,6 +257,9 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  // Update floating cursor position (even when drawing — stopPropagation blocks global handler)
+  updateCursorPosition(e);
+
   // Finger: always ignore
   if (e.pointerType === 'touch') return;
   if (!drawing) return;
@@ -416,12 +424,12 @@ export function setAnnotationTool(t) {
   document.querySelectorAll('.ann-tool-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === t);
   });
-  // Canvas pointer events
+  // Canvas pointer events — ALWAYS auto
+  // Pen events are captured by our handler (preventDefault + stopPropagation)
+  // Finger events pass through (no preventDefault) → browser scrolls
+  // Mouse events: handled by shouldDraw() check
   if (canvas) {
-    // Drawing tools: canvas captures pen/mouse events
-    // None/laser: canvas is transparent → clicks go to notebook for navigation
-    const isDrawingTool = (t === 'pen' || t === 'hl' || t === 'eraser');
-    canvas.style.pointerEvents = isDrawingTool ? 'auto' : 'none';
+    canvas.style.pointerEvents = 'auto';
     updateCursor();
   }
   // Laser overlay
@@ -480,7 +488,8 @@ function updateCursor() {
   if (canvas) canvas.style.cursor = 'none';
 }
 
-function onGlobalPointerMove(e) {
+// Shared cursor position updater (called from both global handler and canvas pointermove)
+function updateCursorPosition(e) {
   if (!cursorEl || tool === 'none') return;
   if (e.pointerType === 'touch') {
     cursorEl.style.display = 'none';
@@ -491,6 +500,10 @@ function onGlobalPointerMove(e) {
   const h = parseInt(cursorEl.style.height) || 12;
   cursorEl.style.left = (e.clientX - w / 2) + 'px';
   cursorEl.style.top = (e.clientY - h / 2) + 'px';
+}
+
+function onGlobalPointerMove(e) {
+  updateCursorPosition(e);
 }
 
 // ─── UNDO / REDO ───
@@ -627,7 +640,8 @@ export async function onExerciseChange() {
     canvas = document.createElement('canvas');
     canvas.className = 'annotation-canvas';
     canvas.id = 'annotationCanvas';
-    canvas.style.touchAction = 'none';
+    canvas.style.touchAction = 'auto';
+    canvas.style.pointerEvents = 'auto';
     notebook.appendChild(canvas);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
 

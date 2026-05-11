@@ -371,9 +371,11 @@ document.getElementById('notebookContent').addEventListener('pointerup', (e) => 
   state.stepCtrl.next();
 });
 
-// Mouse double-click = go back one step (ALL modes)
+// Mouse double-click = go back one step (only when no drawing tool active)
 document.getElementById('notebookContent').addEventListener('dblclick', (e) => {
   if (!state.stepCtrl) return;
+  // Don't navigate back if a drawing tool is actively capturing mouse
+  if (isToolActive()) return;
   e.preventDefault();
   state.stepCtrl.prev();
 });
