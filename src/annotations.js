@@ -442,6 +442,8 @@ function onPointerUp(e) {
   if (e.pointerType === 'pen') {
     e.preventDefault();
     e.stopPropagation();
+    // Hide cursor circle when pen is lifted/leaves screen
+    if (cursorEl) cursorEl.style.display = 'none';
   }
   
   if (!drawing) return;
