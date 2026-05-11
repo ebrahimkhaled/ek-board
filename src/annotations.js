@@ -56,10 +56,14 @@ export function isAutoMode() {
 // Called by main.js to check if a pointer event should navigate
 // Returns true if this event is NOT being handled by the annotation engine
 export function shouldNavigate(pointerType) {
-  if (pointerType === 'pen') return false; // Pen NEVER navigates
-  if (pointerType === 'touch') return true; // Finger ALWAYS navigates
+  // ✋ Hand mode: EVERYTHING navigates, nothing draws
+  if (tool === 'hand' || tool === 'none') return true;
+  // Pen draws (when a drawing tool is selected)
+  if (pointerType === 'pen') return false;
+  // Finger always navigates
+  if (pointerType === 'touch') return true;
   // Mouse: navigates only if no drawing tool is active
-  return tool === 'none' || tool === 'hand';
+  return !(tool === 'pen' || tool === 'hl' || tool === 'eraser');
 }
 
 // ─── INIT ───
@@ -149,10 +153,12 @@ function getPos(e) {
 }
 
 // ─── INPUT DISCRIMINATION ───
-// RULE: Pen → ALWAYS draw | Finger → NEVER draw | Mouse → draw only if tool active
+// Hand/None → nothing draws. Pen → draws. Finger → never. Mouse → only if tool active.
 function shouldDraw(e) {
-  if (e.pointerType === 'pen') return true;    // Apple Pencil: ALWAYS draws
-  if (e.pointerType === 'touch') return false; // Finger: NEVER draws, let main.js navigate
+  // ✋ Hand mode: nothing draws
+  if (tool === 'hand' || tool === 'none') return false;
+  if (e.pointerType === 'touch') return false; // Finger: NEVER draws
+  if (e.pointerType === 'pen') return true;     // Apple Pencil: draws when tool active
   // Mouse: draws only when a drawing/eraser tool is selected
   return tool === 'pen' || tool === 'hl' || tool === 'eraser';
 }
@@ -162,8 +168,11 @@ function onPointerDown(e) {
   // ── FINGER: never handled here, pass through to main.js ──
   if (e.pointerType === 'touch') return;
 
+  // ── HAND mode: pass everything through to main.js ──
+  if (tool === 'hand' || tool === 'none') return;
+
   // ── PEN: auto-activate last tool if none selected ──
-  if (e.pointerType === 'pen' && (tool === 'none' || tool === 'hand')) {
+  if (e.pointerType === 'pen' && tool === 'laser') {
     setAnnotationTool(lastDrawTool || 'pen');
   }
 
@@ -337,10 +346,10 @@ export function setAnnotationTool(t) {
   });
   // Canvas pointer events + cursor
   if (canvas) {
-    // In auto mode, canvas always captures pointer events (discrimination happens in handler)
-    // In manual mode, only when a drawing tool is active
-    const shouldCapture = autoMode || (t !== 'none' && t !== 'laser');
-    canvas.style.pointerEvents = shouldCapture ? 'auto' : 'none';
+    // Hand/None: canvas is transparent to events → navigation works
+    // Drawing tools: canvas captures events → drawing works
+    const isDrawingTool = (t === 'pen' || t === 'hl' || t === 'eraser');
+    canvas.style.pointerEvents = isDrawingTool ? 'auto' : 'none';
     updateCursor();
   }
   // Laser overlay — z-index BELOW toolbar so toolbar is still clickable
