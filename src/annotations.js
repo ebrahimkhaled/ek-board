@@ -53,6 +53,15 @@ export function isAutoMode() {
   return autoMode;
 }
 
+// Called by main.js to check if a pointer event should navigate
+// Returns true if this event is NOT being handled by the annotation engine
+export function shouldNavigate(pointerType) {
+  if (pointerType === 'pen') return false; // Pen NEVER navigates
+  if (pointerType === 'touch') return true; // Finger ALWAYS navigates
+  // Mouse: navigates only if no drawing tool is active
+  return tool === 'none' || tool === 'hand';
+}
+
 // ─── INIT ───
 export function initAnnotations(notebookEl) {
   notebook = notebookEl;
@@ -140,33 +149,32 @@ function getPos(e) {
 }
 
 // ─── INPUT DISCRIMINATION ───
-// Determines if this pointer event should draw or be ignored (let main.js handle it)
+// RULE: Pen → ALWAYS draw | Finger → NEVER draw | Mouse → draw only if tool active
 function shouldDraw(e) {
-  if (autoMode) {
-    // Auto mode: stylus always draws, finger never draws, mouse follows tool
-    if (e.pointerType === 'pen') return true;   // Apple Pencil / stylus
-    if (e.pointerType === 'touch') return false; // Finger → navigate
-    // Mouse follows tool state
-    return tool !== 'none' && tool !== 'laser';
-  } else {
-    // Manual mode: everything follows toolbar selection
-    return tool !== 'none' && tool !== 'laser';
-  }
+  if (e.pointerType === 'pen') return true;    // Apple Pencil: ALWAYS draws
+  if (e.pointerType === 'touch') return false; // Finger: NEVER draws, let main.js navigate
+  // Mouse: draws only when a drawing/eraser tool is selected
+  return tool === 'pen' || tool === 'hl' || tool === 'eraser';
 }
 
-// ─── POINTER EVENTS (unified mouse + touch + stylus) ───
+// ─── POINTER EVENTS ───
 function onPointerDown(e) {
-  // Auto-mode: stylus auto-activates last drawing tool
-  if (autoMode && e.pointerType === 'pen' && tool === 'none') {
+  // ── FINGER: never handled here, pass through to main.js ──
+  if (e.pointerType === 'touch') return;
+
+  // ── PEN: auto-activate last tool if none selected ──
+  if (e.pointerType === 'pen' && (tool === 'none' || tool === 'hand')) {
     setAnnotationTool(lastDrawTool || 'pen');
   }
 
+  // ── Check if this input type should draw ──
   if (!shouldDraw(e)) return;
 
+  // STOP event from reaching main.js (prevents step advance while drawing)
   e.preventDefault();
   e.stopPropagation();
 
-  // Double-tap detection for stylus: toggle pen ↔ eraser
+  // ── PEN double-tap: toggle pen ↔ eraser ──
   if (e.pointerType === 'pen') {
     const now = Date.now();
     if (now - lastTapTime < 500) {
@@ -186,26 +194,28 @@ function onPointerDown(e) {
   drawing = true;
   redoStack = [];
 
-  // ERASER: whole-stroke deletion mode
+  // ERASER: whole-stroke deletion
   if (tool === 'eraser') {
     eraseStrokeAt(p);
     return;
   }
 
-  const activeTool = tool;
+  // PEN / HIGHLIGHTER: start new stroke
   curStroke = {
-    tool: activeTool,
+    tool: tool,
     color: penColor,
-    size: activeTool === 'hl' ? penSize * 3 : penSize,
+    size: tool === 'hl' ? penSize * 3 : penSize,
     pts: [p]
   };
 }
 
 function onPointerMove(e) {
+  if (e.pointerType === 'touch') return; // Finger: never handle
   if (!drawing) return;
   if (!shouldDraw(e)) return;
   e.preventDefault();
   e.stopPropagation();
+
   const p = getPos(e);
 
   // ERASER: keep deleting strokes as we drag
@@ -221,6 +231,7 @@ function onPointerMove(e) {
 }
 
 function onPointerUp(e) {
+  if (e.pointerType === 'touch') return; // Finger: never handle
   if (!drawing) return;
   drawing = false;
   if (curStroke && curStroke.pts.length >= 2) {

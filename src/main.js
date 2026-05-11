@@ -5,7 +5,7 @@
 import './style.css';
 import { parseMD, getExerciseById } from './parser.js';
 import { renderExercise, StepController } from './notebook.js';
-import { initAnnotations, onExerciseChange, isToolActive, isAutoMode } from './annotations.js';
+import { initAnnotations, onExerciseChange, isToolActive, isAutoMode, shouldNavigate } from './annotations.js';
 import { initPresenter } from './presenter.js';
 import { saveProgressToCloud, loadProgressFromCloud } from './firebase.js';
 
@@ -309,49 +309,39 @@ function saveStepProgress(chId, exId, step) {
 
 // ─── EVENT LISTENERS ───
 
-// Notebook click/tap to advance steps
-// Uses pointer events to distinguish finger vs mouse vs stylus
+// ── NAVIGATION INPUT ──
+// INPUT RULES (set in annotations.js):
+//   Pen → NEVER navigates (always draws)
+//   Finger → ALWAYS navigates (tap=next, double-tap=back)
+//   Mouse → navigates only if no drawing tool active
+
 let lastFingerTap = 0;
 
 document.getElementById('notebookContent').addEventListener('pointerup', (e) => {
-  // Only handle events that bubble up (not captured by annotation canvas)
   if (!state.stepCtrl) return;
 
-  if (isAutoMode()) {
-    // Auto mode: stylus events are handled by annotation engine
-    if (e.pointerType === 'pen') return;
+  // Ask annotation engine: should this pointer type navigate?
+  if (!shouldNavigate(e.pointerType)) return;
 
-    // Finger: single tap = next, double-tap = back
-    if (e.pointerType === 'touch') {
-      const now = Date.now();
-      if (now - lastFingerTap < 350) {
-        state.stepCtrl.prev();
-        lastFingerTap = 0;
-        return;
-      }
-      lastFingerTap = now;
-      // Delay next to allow double-tap detection
-      setTimeout(() => {
-        if (lastFingerTap !== 0 && Date.now() - lastFingerTap >= 300) {
-          state.stepCtrl.next();
-        }
-      }, 360);
+  // Finger: single tap = next, double-tap = back (with delay)
+  if (e.pointerType === 'touch') {
+    const now = Date.now();
+    if (now - lastFingerTap < 400) {
+      state.stepCtrl.prev();
+      lastFingerTap = 0;
       return;
     }
-
-    // Mouse: advance only if no drawing tool is active
-    if (e.pointerType === 'mouse') {
-      if (!isToolActive()) {
+    lastFingerTap = now;
+    setTimeout(() => {
+      if (lastFingerTap !== 0 && Date.now() - lastFingerTap >= 380) {
         state.stepCtrl.next();
       }
-      return;
-    }
-  } else {
-    // Manual mode: advance only if no tool is active
-    if (!isToolActive()) {
-      state.stepCtrl.next();
-    }
+    }, 400);
+    return;
   }
+
+  // Mouse: single click = next step
+  state.stepCtrl.next();
 });
 
 // Mouse double-click = go back one step (ALL modes)
