@@ -140,12 +140,13 @@ body {
 
 /* Writing animation — clip left to right */
 .line.visible .writing {
-  animation: writeIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: writeIn 0.85s linear forwards;
 }
 
 @keyframes writeIn {
-  from { clip-path: inset(0 100% 0 0); }
-  to   { clip-path: inset(0 0 0 0); }
+  0% { clip-path: inset(0 100% 0 0); opacity: 0; }
+  10% { opacity: 1; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
 }
 
 /* Question box: use fade instead of clip (clip breaks inside bordered container) */
@@ -530,7 +531,6 @@ body {
   /* Width/height set by JS to match scrollWidth/scrollHeight */
   /* pointer-events and touch-action are managed dynamically by JS */
   z-index: 10;
-  touch-action: none;
 }
 
 /* Laser overlay — fixed to viewport, z-index BELOW toolbar so buttons remain clickable */

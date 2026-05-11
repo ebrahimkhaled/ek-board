@@ -136,6 +136,10 @@ export function initAnnotations(notebookEl) {
   // ensuring strokes begin immediately with zero latency.
   document.addEventListener('touchstart', (e) => {
     if (e.touches && e.touches[0] && e.touches[0].touchType === 'stylus') {
+      // Allow clicking on UI elements (toolbar, buttons) with the Apple Pencil
+      if (e.target.closest('.ann-toolbar') || e.target.closest('button') || e.target.closest('input')) {
+        return; 
+      }
       e.preventDefault();
     }
   }, { passive: false });
@@ -147,21 +151,16 @@ export function initAnnotations(notebookEl) {
     showDebugInput(e.pointerType);  // Debug indicator
     
     if (e.pointerType === 'pen') {
-      // SET PEN ACTIVE FLAG — this blocks ALL navigation in main.js
       penActive = true;
-      // Pen: make canvas capture events → drawing works
-      canvas.style.pointerEvents = 'auto';
       // Auto-activate drawing tool if none selected
       if (tool === 'none' || tool === 'laser') {
         setAnnotationTool(lastDrawTool || 'pen');
       }
-    } else if (e.pointerType === 'touch') {
-      // Finger: make canvas invisible to events → browser scrolls the page
-      canvas.style.pointerEvents = 'none';
-    } else if (e.pointerType === 'mouse') {
-      // Mouse: canvas auto (JS handler checks shouldDraw)
-      canvas.style.pointerEvents = 'auto';
     }
+    // We NO LONGER toggle canvas.style.pointerEvents here! 
+    // The canvas is permanently 'auto'. 
+    // If pointerType === 'touch', we simply don't call e.preventDefault() in onPointerDown,
+    // which allows Safari to natively scroll the page underneath without complex state management.
   }, true);
 
   // Pen up: clear flag + block propagation
