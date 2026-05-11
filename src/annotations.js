@@ -149,14 +149,19 @@ export function initAnnotations(notebookEl) {
     }
   }, true); // useCapture: fires before canvas handlers
 
-  // Re-enable canvas/laser pointer-events after finger lift
+  // CRITICAL: Globally block ALL pen pointerup from reaching main.js
+  // This prevents pen from triggering step advance even when pen lifts
+  // outside the canvas (e.g., after a long horizontal stroke)
   document.addEventListener('pointerup', (e) => {
-    if (!canvas) return;
-    if (e.pointerType === 'touch') {
-      // Small delay to avoid re-capturing the same touch
+    if (e.pointerType === 'pen') {
+      e.stopPropagation();
+    }
+    // Finger: keep canvas pointer-events OFF. It will be re-enabled
+    // only when the next PEN event comes in (see pointerdown above).
+    // This ensures finger always falls through to the scrollable notebook.
+    if (e.pointerType === 'touch' && laserSvg && tool === 'laser') {
+      // Re-enable laser overlay only (canvas stays off for finger)
       setTimeout(() => {
-        if (canvas) canvas.style.pointerEvents = 'auto';
-        // Re-enable laser if laser tool is active
         if (laserSvg && tool === 'laser') laserSvg.style.pointerEvents = 'auto';
       }, 50);
     }
@@ -329,7 +334,7 @@ function onPointerMove(e) {
 function onPointerUp(e) {
   if (e.pointerType === 'touch') return;
   
-  // CRITICAL: Stop pen pointerup from bubbling to main.js navigation handler
+  // Pen: always prevent + stop (also done at document capture level as safety)
   if (e.pointerType === 'pen') {
     e.preventDefault();
     e.stopPropagation();
@@ -340,6 +345,8 @@ function onPointerUp(e) {
   
   if (curStroke && curStroke.pts.length >= 2) {
     strokes.push(curStroke);
+    // Render completed stroke to offscreen cache for performance
+    bakeStrokeToCache(curStroke);
   }
   curStroke = null;
   scheduleRedraw();
@@ -363,6 +370,7 @@ function eraseStrokeAt(pt) {
     }
   }
   if (erased) {
+    cacheValid = false;  // Invalidate cache
     scheduleRedraw();
     saveAnnotations();
   }
@@ -399,12 +407,53 @@ function onLaserUp() {
   lastLaserPt = null;
 }
 
-// ─── STROKE RENDERING (perfect-freehand) ───
+// ─── STROKE RENDERING (with offscreen cache for performance) ───
+let cacheCanvas = null;
+let cacheCtx = null;
+let cacheValid = false;
+
+// Bake a single new stroke onto the cache (called when stroke completes)
+function bakeStrokeToCache(stroke) {
+  ensureCacheCanvas();
+  drawStroke(stroke, cacheCtx);
+}
+
+// Rebuild entire cache from scratch (after undo, redo, erase, load)
+function rebuildCache() {
+  ensureCacheCanvas();
+  cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+  strokes.forEach(s => drawStroke(s, cacheCtx));
+  cacheValid = true;
+}
+
+function ensureCacheCanvas() {
+  if (!cacheCanvas) {
+    cacheCanvas = document.createElement('canvas');
+    cacheCtx = cacheCanvas.getContext('2d');
+  }
+  if (canvas && (cacheCanvas.width !== canvas.width || cacheCanvas.height !== canvas.height)) {
+    cacheCanvas.width = canvas.width;
+    cacheCanvas.height = canvas.height;
+    // Size changed — must rebuild
+    cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+    strokes.forEach(s => drawStroke(s, cacheCtx));
+    cacheValid = true;
+  }
+}
+
 function redrawAll() {
   if (!ctx || !canvas) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!visible) return;
-  strokes.forEach(s => drawStroke(s, ctx));
+  
+  // Draw from offscreen cache (fast: single drawImage call)
+  if (cacheValid && cacheCanvas) {
+    ctx.drawImage(cacheCanvas, 0, 0);
+  } else {
+    // Fallback: draw all strokes directly + build cache
+    rebuildCache();
+    ctx.drawImage(cacheCanvas, 0, 0);
+  }
 }
 
 function drawStroke(s, cx) {
@@ -556,6 +605,7 @@ function onGlobalPointerMove(e) {
 export function undoAnnotation() {
   if (!strokes.length) return;
   redoStack.push(strokes.pop());
+  cacheValid = false;  // Invalidate cache
   scheduleRedraw();
   saveAnnotations();
 }
@@ -563,6 +613,7 @@ export function undoAnnotation() {
 export function redoAnnotation() {
   if (!redoStack.length) return;
   strokes.push(redoStack.pop());
+  cacheValid = false;  // Invalidate cache
   scheduleRedraw();
   saveAnnotations();
 }
@@ -580,6 +631,7 @@ export function toggleVisibility() {
 export function clearAnnotations() {
   strokes = [];
   redoStack = [];
+  cacheValid = false;  // Invalidate cache
   scheduleRedraw();
   // Save empty state immediately
   try { localStorage.setItem(getLocalKey(), '[]'); } catch {}
@@ -640,6 +692,7 @@ async function loadAnnotations() {
     const local = localStorage.getItem(localKey);
     if (local) {
       strokes = JSON.parse(local);
+      cacheValid = false;  // Invalidate cache
       scheduleRedraw();
     }
   } catch {}
@@ -652,6 +705,7 @@ async function loadAnnotations() {
       strokes = cloudData;
       try { localStorage.setItem(localKey, JSON.stringify(strokes)); } catch {}
       showSyncStatus('loaded');
+      cacheValid = false;  // Invalidate cache
       scheduleRedraw();
     } else if (strokes.length > 0) {
       showSyncStatus('local');
