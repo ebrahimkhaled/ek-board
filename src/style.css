@@ -12,10 +12,13 @@
 }
 
 :root {
+  /* Font Scaling */
+  --text-scale: 1;
+
   /* Paper */
   --paper-bg: #fefef6;
   --grid-color: rgba(180, 210, 235, 0.35);
-  --grid-size: 32px;
+  --grid-size: calc(32px * var(--text-scale, 1));
   --margin-red: rgba(200, 80, 80, 0.35);
   --desk-bg: #c4b89a;
 
@@ -35,7 +38,7 @@
   --font-ui: 'Inter', sans-serif;
 
   /* Sizing */
-  --line-height: 34px;
+  --line-height: calc(34px * var(--text-scale, 1));
   --margin-left: 80px;
 }
 
@@ -123,7 +126,7 @@ body {
   min-height: var(--line-height);
   display: flex;
   align-items: center;
-  font-size: 1.2rem;
+  font-size: calc(1.2rem * var(--text-scale, 1));
   line-height: var(--line-height);
   position: relative;
   padding: 2px 0;
@@ -160,21 +163,21 @@ body {
 .red     { color: var(--pen-red); }
 .blue    { color: var(--pen-blue); }
 .green   { color: var(--pen-green); }
-.pencil  { color: var(--pen-pencil); font-style: italic; font-size: 1.05rem; }
+.pencil  { color: var(--pen-pencil); font-style: italic; font-size: calc(1.05rem * var(--text-scale, 1)); }
 
 /* ═══ LINE TYPES ═══ */
 
 /* Title (Exercise header) */
 .title {
   font-family: var(--font-header);
-  font-size: 2rem;
+  font-size: calc(2rem * var(--text-scale, 1));
   font-weight: 700;
   color: var(--pen-blue);
   text-decoration: underline;
   text-decoration-color: var(--pen-red);
   text-underline-offset: 6px;
   text-decoration-thickness: 2px;
-  min-height: 52px;
+  min-height: calc(52px * var(--text-scale, 1));
   margin-bottom: 12px;
   margin-top: 10px;
 }
@@ -182,7 +185,7 @@ body {
 /* Section headers (Solution parts) — spacing AFTER so student eyes rest */
 .section-header {
   font-family: var(--font-header);
-  font-size: 1.45rem;
+  font-size: calc(1.45rem * var(--text-scale, 1));
   font-weight: 700;
   color: var(--pen-red);
   text-decoration: underline;
@@ -204,8 +207,8 @@ body {
 /* Math display */
 .math-center {
   justify-content: center;
-  font-size: 1.3rem;
-  min-height: 44px;
+  font-size: calc(1.3rem * var(--text-scale, 1));
+  min-height: calc(44px * var(--text-scale, 1));
   padding: 4px 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -215,8 +218,8 @@ body {
 .math-aligned {
   justify-content: flex-start;
   padding-left: 60px;
-  font-size: 1.3rem;
-  min-height: 40px;
+  font-size: calc(1.3rem * var(--text-scale, 1));
+  min-height: calc(40px * var(--text-scale, 1));
   padding-top: 2px;
   padding-bottom: 2px;
   overflow-x: auto;
@@ -226,8 +229,8 @@ body {
 /* First line of aligned block — not indented */
 .math-aligned-first {
   justify-content: center;
-  font-size: 1.3rem;
-  min-height: 44px;
+  font-size: calc(1.3rem * var(--text-scale, 1));
+  min-height: calc(44px * var(--text-scale, 1));
   padding: 4px 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -243,7 +246,7 @@ body {
   width: 100%;
   line-height: 1.7;
   color: var(--pen-blue);
-  font-size: 1.1rem;
+  font-size: calc(1.1rem * var(--text-scale, 1));
   overflow: visible;
 }
 .question-box strong { color: var(--pen-red); }

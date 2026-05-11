@@ -1000,6 +1000,45 @@ function buildToolbar() {
   slider.addEventListener('click', (e) => e.stopPropagation());
   toolbar.appendChild(slider);
 
+  toolbar.appendChild(makeDivider());
+
+  // Text Scale UI (Aa button + Slider)
+  const textScaleBtn = document.createElement('button');
+  textScaleBtn.className = 'ann-tool-btn';
+  textScaleBtn.textContent = 'Aa';
+  textScaleBtn.title = 'Text Size';
+  toolbar.appendChild(textScaleBtn);
+  
+  const textScaleContainer = document.createElement('div');
+  textScaleContainer.style.display = 'none';
+  textScaleContainer.style.alignItems = 'center';
+  textScaleContainer.style.marginLeft = '4px';
+  
+  const textSlider = document.createElement('input');
+  textSlider.type = 'range';
+  textSlider.min = '0.7';
+  textSlider.max = '1.8';
+  textSlider.step = '0.05';
+  textSlider.value = '1';
+  textSlider.className = 'ann-size-slider';
+  textSlider.title = 'Adjust Text Size';
+  
+  textSlider.addEventListener('input', (e) => {
+    document.documentElement.style.setProperty('--text-scale', e.target.value);
+    // Let the browser reflow CSS, then fix canvas sizes so drawings stay aligned
+    setTimeout(resizeCanvas, 50);
+  });
+  textSlider.addEventListener('click', (e) => e.stopPropagation());
+  
+  textScaleContainer.appendChild(textSlider);
+  toolbar.appendChild(textScaleContainer);
+  
+  textScaleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isVis = textScaleContainer.style.display !== 'none';
+    textScaleContainer.style.display = isVis ? 'none' : 'flex';
+  });
+
   // Clear button
   const clearBtn = document.createElement('button');
   clearBtn.className = 'ann-tool-btn ann-clear';
