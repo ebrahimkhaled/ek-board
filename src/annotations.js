@@ -123,6 +123,37 @@ export function initAnnotations(notebookEl) {
   document.body.appendChild(cursorEl);
   document.addEventListener('pointermove', onGlobalPointerMove);
 
+  // ── CRITICAL: iPad finger scroll fix ──
+  // Problem: canvas with pointer-events:auto blocks finger scrolling on iPad Safari.
+  // Solution: Listen at document level. When FINGER touches, instantly make canvas
+  // transparent so the touch falls through to the scrollable content underneath.
+  // When PEN touches, keep canvas active so it captures the drawing.
+  document.addEventListener('pointerdown', (e) => {
+    if (!canvas) return;
+    if (e.pointerType === 'touch') {
+      // Finger: make canvas invisible to events → browser scrolls the page
+      canvas.style.pointerEvents = 'none';
+    } else if (e.pointerType === 'pen') {
+      // Pen: make canvas capture events → drawing works
+      canvas.style.pointerEvents = 'auto';
+      // Auto-activate drawing tool if none selected
+      if (tool === 'none' || tool === 'laser') {
+        setAnnotationTool(lastDrawTool || 'pen');
+      }
+    }
+  }, true); // useCapture: fires before canvas handlers
+
+  // Re-enable canvas pointer-events after finger lift
+  document.addEventListener('pointerup', (e) => {
+    if (!canvas) return;
+    if (e.pointerType === 'touch') {
+      // Small delay to avoid re-capturing the same touch
+      setTimeout(() => {
+        if (canvas) canvas.style.pointerEvents = 'auto';
+      }, 50);
+    }
+  }, true);
+
   // Build toolbar
   buildToolbar();
 
