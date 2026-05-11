@@ -91,10 +91,6 @@ export function initAnnotations(notebookEl) {
   canvas = document.createElement('canvas');
   canvas.className = 'annotation-canvas';
   canvas.id = 'annotationCanvas';
-  // touch-action: none on canvas — prevents pen from triggering browser scroll/pan.
-  // Finger bypasses the canvas entirely (pointer-events toggled to 'none' in capture handler)
-  // so finger still scrolls normally through the notebook underneath.
-  canvas.style.touchAction = 'none';
   // Start with pointer-events auto (pen hits canvas, finger toggle disables it)
   canvas.style.pointerEvents = 'auto';
   notebook.appendChild(canvas);
@@ -881,7 +877,6 @@ export async function onExerciseChange() {
     canvas = document.createElement('canvas');
     canvas.className = 'annotation-canvas';
     canvas.id = 'annotationCanvas';
-    canvas.style.touchAction = 'none';
     canvas.style.pointerEvents = 'auto';
     notebook.appendChild(canvas);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
