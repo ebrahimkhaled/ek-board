@@ -195,13 +195,59 @@ export function initAnnotations(notebookEl) {
 }
 
 // ─── RENDER LOOP (rAF batched) ───
+let lastDrawBox = null;
+
 function renderLoop() {
   if (needsRedraw) {
     needsRedraw = false;
-    redrawAll();
-    // Also draw current in-progress stroke
+    
     if (curStroke && curStroke.pts.length >= 2) {
+      // Calculate dirty rectangle (bounding box) of the active stroke
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (let p of curStroke.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      const pad = curStroke.size * 5 + 10;
+      const box = {
+        x: Math.floor(minX - pad),
+        y: Math.floor(minY - pad),
+        w: Math.ceil(maxX - minX + pad * 2),
+        h: Math.ceil(maxY - minY + pad * 2)
+      };
+      
+      // Combine with previous frame's box to ensure we clear the tail
+      let clearBox = box;
+      if (lastDrawBox) {
+        const cx1 = Math.min(box.x, lastDrawBox.x);
+        const cy1 = Math.min(box.y, lastDrawBox.y);
+        const cx2 = Math.max(box.x + box.w, lastDrawBox.x + lastDrawBox.w);
+        const cy2 = Math.max(box.y + box.h, lastDrawBox.y + lastDrawBox.h);
+        clearBox = { x: cx1, y: cy1, w: cx2 - cx1, h: cy2 - cy1 };
+      }
+      lastDrawBox = box;
+      
+      const dpr = window.devicePixelRatio || 1;
+      
+      // Clear ONLY the dirty area on main canvas
+      ctx.clearRect(clearBox.x, clearBox.y, clearBox.w, clearBox.h);
+      
+      // Restore ONLY the dirty area from cache
+      if (cacheValid && cacheCanvas) {
+        ctx.drawImage(cacheCanvas, 
+          clearBox.x * dpr, clearBox.y * dpr, clearBox.w * dpr, clearBox.h * dpr,
+          clearBox.x, clearBox.y, clearBox.w, clearBox.h);
+      }
+      
+      // Draw the active stroke
       drawStroke(curStroke, ctx);
+      
+    } else {
+      // Full redraw (stroke finished, undone, erased, etc)
+      lastDrawBox = null;
+      redrawAll();
     }
   }
   requestAnimationFrame(renderLoop);
@@ -518,20 +564,48 @@ function redrawAll() {
   }
 }
 
+// Global persistent temp canvas for high-performance highlighter rendering
+let hlCanvas = null;
+let hlCtx = null;
+function ensureHlCanvas() {
+  if (!hlCanvas) {
+    hlCanvas = document.createElement('canvas');
+    hlCtx = hlCanvas.getContext('2d');
+  }
+  if (canvas && (hlCanvas.width !== canvas.width || hlCanvas.height !== canvas.height)) {
+    hlCanvas.width = canvas.width;
+    hlCanvas.height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    hlCtx.setTransform(1, 0, 0, 1, 0, 0);
+    hlCtx.scale(dpr, dpr);
+  }
+}
+
 function drawStroke(s, cx) {
   if (s.pts.length < 2) return;
   cx.save();
 
   if (s.tool === 'hl') {
     // Highlighter: draw at full opacity on a temp canvas, then composite with alpha.
-    // This prevents semi-transparent color stacking at line join points.
-    const hlCanvas = document.createElement('canvas');
-    hlCanvas.width = canvas.width;
-    hlCanvas.height = canvas.height;
-    const hlCtx = hlCanvas.getContext('2d');
-    
+    ensureHlCanvas();
     const dpr = window.devicePixelRatio || 1;
-    hlCtx.scale(dpr, dpr);
+    
+    // Calculate dirty rectangle (bounding box) to avoid clearing the entire 4K canvas 60 times a second
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let p of s.pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const pad = s.size * 5 + 10;
+    const bx = Math.floor(minX - pad);
+    const by = Math.floor(minY - pad);
+    const bw = Math.ceil(maxX - minX + pad * 2);
+    const bh = Math.ceil(maxY - minY + pad * 2);
+    
+    // Clear ONLY the bounding box on the temp canvas
+    hlCtx.clearRect(bx, by, bw, bh);
     
     hlCtx.strokeStyle = s.color;
     hlCtx.lineWidth = s.size * 4;
@@ -541,20 +615,21 @@ function drawStroke(s, cx) {
     hlCtx.beginPath();
     hlCtx.moveTo(s.pts[0].x, s.pts[0].y);
     
-    // Use quadratic curves for smooth path (reduces jagged segments)
+    // Use quadratic curves for smooth path
     for (let i = 1; i < s.pts.length - 1; i++) {
       const mx = (s.pts[i].x + s.pts[i + 1].x) / 2;
       const my = (s.pts[i].y + s.pts[i + 1].y) / 2;
       hlCtx.quadraticCurveTo(s.pts[i].x, s.pts[i].y, mx, my);
     }
-    // Last point
     const last = s.pts[s.pts.length - 1];
     hlCtx.lineTo(last.x, last.y);
     hlCtx.stroke();
     
-    // Composite onto main canvas with transparency
+    // Composite onto main canvas with transparency, ONLY the bounding box
     cx.globalAlpha = 0.25;
-    cx.drawImage(hlCanvas, 0, 0, hlCanvas.width / dpr, hlCanvas.height / dpr);
+    cx.drawImage(hlCanvas, 
+      bx * dpr, by * dpr, bw * dpr, bh * dpr, 
+      bx, by, bw, bh);
   } else {
     // Pen: use perfect-freehand for smooth, pressure-sensitive strokes
     const inputPoints = s.pts.map(p => [p.x, p.y, p.p || 0.5]);
