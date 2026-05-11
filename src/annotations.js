@@ -1,13 +1,26 @@
 /**
- * annotations.js — EK-Board Annotation Engine
+ * annotations.js — EK-Board Annotation Engine v2
  * 
- * Input discrimination:
- *   - Apple Pencil / Stylus → always draws (auto-activates pen)
- *   - Finger → always navigates (next step / scroll)
- *   - Mouse → follows toolbar state (manual tool selection)
+ * Architecture (based on tldraw/Excalidraw patterns):
  * 
- * Persistence: localStorage (instant) + Firestore (debounced cloud sync)
+ *   Canvas: touch-action: none (full control over all pointer events)
+ *   
+ *   Pen   → ALWAYS draws. preventDefault() claims the pointer.
+ *            Auto-activates last tool. Double-tap screen = pen↔eraser.
+ *            Uses getCoalescedEvents() for smooth strokes.
+ *            Reads e.pressure for pressure-sensitive width.
+ *   
+ *   Finger → NEVER draws. No preventDefault() → browser handles scroll.
+ *            Tap/double-tap detected by main.js for step navigation.
+ *   
+ *   Mouse → Follows toolbar. If tool active → draws. If none → navigate.
+ * 
+ * Rendering: perfect-freehand for smooth, pressure-sensitive strokes.
+ *            requestAnimationFrame batching for performance.
+ * 
+ * Persistence: localStorage (instant) + Firestore (60s debounced cloud sync)
  */
+import { getStroke } from 'perfect-freehand';
 import { saveToCloud, loadFromCloud } from './firebase.js';
 
 // ─── STATE ───
@@ -21,47 +34,38 @@ let penColor = '#c41e3a';
 let penSize = 3;
 let drawing = false;
 let visible = true;
-let autoMode = true;  // true = auto-detect stylus vs finger
 
-let strokes = [];
+let strokes = [];     // Persisted stroke data
 let redoStack = [];
-let curStroke = null;
+let curStroke = null;  // Current in-progress stroke { tool, color, size, pts: [{x,y,p}] }
 
 // Laser
 let laserSegments = [];
 let laserSegId = 0;
 let lastLaserPt = null;
 
-// Double-tap detection (iPad pen↔eraser)
-let lastTapTime = 0;
+// Double-tap detection (pen tip on screen: toggle pen↔eraser)
+let lastPenTapTime = 0;
 let prevTool = 'pen';
 
-// Last used drawing tool (for auto-mode stylus activation)
+// Last used drawing tool (for pen auto-activation)
 let lastDrawTool = 'pen';
 
 // Floating cursor element (works on iPad unlike CSS cursors)
 let cursorEl = null;
 
-// ─── PUBLIC API ───
-// Called by main.js to check if a tool is active
+// requestAnimationFrame rendering
+let needsRedraw = false;
+
+// ─── PUBLIC API (used by main.js) ───
 export function isToolActive() {
   return tool !== 'none';
 }
 
-// Called by main.js to check if we're in auto mode
-export function isAutoMode() {
-  return autoMode;
-}
-
 // Called by main.js to check if a pointer event should navigate
-// Returns true if this event is NOT being handled by the annotation engine
 export function shouldNavigate(pointerType) {
-  // ✋ Hand mode: EVERYTHING navigates, nothing draws
-  if (tool === 'hand' || tool === 'none') return true;
-  // Pen draws (when a drawing tool is selected)
-  if (pointerType === 'pen') return false;
-  // Finger always navigates
-  if (pointerType === 'touch') return true;
+  if (pointerType === 'pen') return false;    // Pen NEVER navigates
+  if (pointerType === 'touch') return true;   // Finger ALWAYS navigates
   // Mouse: navigates only if no drawing tool is active
   return !(tool === 'pen' || tool === 'hl' || tool === 'eraser');
 }
@@ -74,11 +78,12 @@ export function initAnnotations(notebookEl) {
   canvas = document.createElement('canvas');
   canvas.className = 'annotation-canvas';
   canvas.id = 'annotationCanvas';
-  // Allow finger scrolling through canvas (finger events are ignored by our handler)
-  canvas.style.touchAction = 'auto';
+  // CRITICAL: touch-action:none gives us FULL control over all pointer events.
+  // Finger scroll is handled by NOT calling preventDefault() for touch pointers.
+  canvas.style.touchAction = 'none';
   notebook.appendChild(canvas);
 
-  // Create laser SVG overlay — fixed to viewport, BELOW toolbar z-index
+  // Create laser SVG overlay
   laserSvg = document.createElement('div');
   laserSvg.className = 'laser-overlay';
   laserSvg.innerHTML = '<svg id="laserSvg" style="width:100%;height:100%"></svg>';
@@ -91,14 +96,14 @@ export function initAnnotations(notebookEl) {
   const ro = new ResizeObserver(resizeCanvas);
   ro.observe(notebook);
 
-  // ── POINTER EVENTS (replaces mouse+touch for input discrimination) ──
+  // ── POINTER EVENTS ──
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointerleave', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
 
-  // Laser events — use pointer events too
+  // Laser events
   laserSvg.addEventListener('pointerdown', onLaserDown);
   laserSvg.addEventListener('pointermove', onLaserMove);
   laserSvg.addEventListener('pointerup', onLaserUp);
@@ -106,21 +111,38 @@ export function initAnnotations(notebookEl) {
   // Keyboard shortcuts
   document.addEventListener('keydown', onKey);
 
-  // Create floating cursor element (iPad doesn't support CSS custom cursors)
+  // Floating cursor
   cursorEl = document.createElement('div');
   cursorEl.id = 'floatingCursor';
   cursorEl.className = 'floating-cursor';
   document.body.appendChild(cursorEl);
-
-  // Track pointer movement globally for cursor position
   document.addEventListener('pointermove', onGlobalPointerMove);
-  document.addEventListener('pointerleave', () => { if (cursorEl) cursorEl.style.display = 'none'; });
 
   // Build toolbar
   buildToolbar();
 
   // Load saved annotations
   loadAnnotations();
+
+  // Start render loop
+  requestAnimationFrame(renderLoop);
+}
+
+// ─── RENDER LOOP (rAF batched) ───
+function renderLoop() {
+  if (needsRedraw) {
+    needsRedraw = false;
+    redrawAll();
+    // Also draw current in-progress stroke
+    if (curStroke && curStroke.pts.length >= 2) {
+      drawStroke(curStroke, ctx);
+    }
+  }
+  requestAnimationFrame(renderLoop);
+}
+
+function scheduleRedraw() {
+  needsRedraw = true;
 }
 
 // ─── RESIZE CANVAS ───
@@ -142,89 +164,72 @@ function resizeCanvas() {
 
 // ─── COORDINATES ───
 // Maps visual (screen) coordinates → canvas buffer coordinates.
-// Handles CSS zoom on notebook by reading the computed zoom factor.
+// Reads CSS zoom directly from notebook — deterministic, no heuristics.
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
-
-  // Get the CSS zoom level applied to the notebook
-  // Safari sometimes doesn't reflect zoom in getBoundingClientRect
+  
+  // Read the CSS zoom level from the notebook
   let zoom = 1;
   if (notebook) {
     const z = parseFloat(notebook.style.zoom);
-    if (z && z !== 1) zoom = z;
+    if (z && !isNaN(z)) zoom = z;
   }
-
-  // In some browsers, getBoundingClientRect already includes zoom.
-  // In others (Safari), it doesn't. Detect by comparing:
-  // If rect.width ≈ canvas.width * zoom → browser included zoom → use ratio directly
-  // If rect.width ≈ canvas.width → browser didn't include zoom → adjust manually
-  const expectedZoomed = canvas.width * zoom;
-  const browserIncludesZoom = Math.abs(rect.width - expectedZoomed) < Math.abs(rect.width - canvas.width);
-
-  if (browserIncludesZoom || zoom === 1) {
-    // Standard path: rect includes zoom, ratio maps correctly
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
-  } else {
-    // Safari fallback: rect doesn't include zoom, we compensate
-    const scaleX = canvas.width / (rect.width * zoom);
-    const scaleY = canvas.height / (rect.height * zoom);
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
-  }
+  
+  // getBoundingClientRect() returns zoomed dimensions in Chrome/Safari.
+  // clientX/clientY are in viewport coordinates.
+  // The ratio maps viewport → buffer coordinates.
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
+    p: e.pressure || 0.5  // Pressure from Apple Pencil (0-1)
+  };
 }
 
 // ─── INPUT DISCRIMINATION ───
-// Hand/None → nothing draws. Pen → draws. Finger → never. Mouse → only if tool active.
-function shouldDraw(e) {
-  // ✋ Hand mode: nothing draws
-  if (tool === 'hand' || tool === 'none') return false;
-  if (e.pointerType === 'touch') return false; // Finger: NEVER draws
-  if (e.pointerType === 'pen') return true;     // Apple Pencil: draws when tool active
-  // Mouse: draws only when a drawing/eraser tool is selected
+// Determines if this pointer should draw based on type and tool state
+function shouldDraw(pointerType) {
+  if (tool === 'none' || tool === 'laser') return false;
+  if (pointerType === 'touch') return false;   // Finger NEVER draws
+  if (pointerType === 'pen') return true;       // Pen ALWAYS draws (when tool active)
+  // Mouse: draws if drawing tool selected
   return tool === 'pen' || tool === 'hl' || tool === 'eraser';
 }
 
 // ─── POINTER EVENTS ───
 function onPointerDown(e) {
-  // ── FINGER: never handled here, pass through to main.js ──
+  // ── FINGER: Let it pass through for scrolling ──
+  // We do NOT call preventDefault() → browser handles scroll natively
   if (e.pointerType === 'touch') return;
 
-  // ── HAND mode: pass everything through to main.js ──
-  if (tool === 'hand' || tool === 'none') return;
-
-  // ── PEN: auto-activate last tool if none selected ──
-  if (e.pointerType === 'pen' && tool === 'laser') {
+  // ── PEN: Auto-activate last drawing tool ──
+  if (e.pointerType === 'pen' && (tool === 'none' || tool === 'laser')) {
     setAnnotationTool(lastDrawTool || 'pen');
   }
 
-  // ── Check if this input type should draw ──
-  if (!shouldDraw(e)) return;
+  // Should this pointer draw?
+  if (!shouldDraw(e.pointerType)) return;
 
-  // STOP event from reaching main.js (prevents step advance while drawing)
+  // CLAIM this pointer — prevents scroll/zoom for pen & mouse
   e.preventDefault();
   e.stopPropagation();
 
   // ── PEN double-tap: toggle pen ↔ eraser ──
   if (e.pointerType === 'pen') {
     const now = Date.now();
-    if (now - lastTapTime < 500) {
+    if (now - lastPenTapTime < 500) {
       if (tool === 'pen' || tool === 'hl') {
         prevTool = tool;
         setAnnotationTool('eraser');
       } else if (tool === 'eraser') {
         setAnnotationTool(prevTool || 'pen');
       }
-      lastTapTime = 0;
+      lastPenTapTime = 0;
       return;
     }
-    lastTapTime = now;
+    lastPenTapTime = now;
   }
 
   const p = getPos(e);
@@ -241,48 +246,55 @@ function onPointerDown(e) {
   curStroke = {
     tool: tool,
     color: penColor,
-    size: tool === 'hl' ? penSize * 3 : penSize,
+    size: penSize,
     pts: [p]
   };
 }
 
 function onPointerMove(e) {
-  if (e.pointerType === 'touch') return; // Finger: never handle
+  // Finger: always ignore
+  if (e.pointerType === 'touch') return;
   if (!drawing) return;
-  if (!shouldDraw(e)) return;
+  if (!shouldDraw(e.pointerType)) return;
+
   e.preventDefault();
   e.stopPropagation();
 
-  const p = getPos(e);
-
   // ERASER: keep deleting strokes as we drag
   if (tool === 'eraser') {
+    const p = getPos(e);
     eraseStrokeAt(p);
     return;
   }
 
   if (!curStroke) return;
-  curStroke.pts.push(p);
-  redrawAll();
-  drawStroke(curStroke, ctx);
+
+  // Use getCoalescedEvents() for extra points between frames (smoother strokes)
+  const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ce of events) {
+    curStroke.pts.push(getPos(ce));
+  }
+
+  // Schedule redraw via rAF (don't draw directly in event handler)
+  scheduleRedraw();
 }
 
 function onPointerUp(e) {
-  if (e.pointerType === 'touch') return; // Finger: never handle
+  if (e.pointerType === 'touch') return;
   if (!drawing) return;
   drawing = false;
+  
   if (curStroke && curStroke.pts.length >= 2) {
     strokes.push(curStroke);
   }
   curStroke = null;
-  redrawAll();
+  scheduleRedraw();
   saveAnnotations();
 }
 
 // ─── WHOLE-STROKE ERASER ───
-// Finds any stroke within eraser radius and removes the entire stroke
 function eraseStrokeAt(pt) {
-  const radius = penSize * 5; // eraser hit area
+  const radius = penSize * 5;
   let erased = false;
   for (let i = strokes.length - 1; i >= 0; i--) {
     const stroke = strokes[i];
@@ -290,7 +302,6 @@ function eraseStrokeAt(pt) {
       const dx = sp.x - pt.x;
       const dy = sp.y - pt.y;
       if (dx * dx + dy * dy < radius * radius) {
-        // Remove entire stroke, push to redo
         redoStack.push(strokes.splice(i, 1)[0]);
         erased = true;
         break;
@@ -298,7 +309,7 @@ function eraseStrokeAt(pt) {
     }
   }
   if (erased) {
-    redrawAll();
+    scheduleRedraw();
     saveAnnotations();
   }
 }
@@ -306,8 +317,7 @@ function eraseStrokeAt(pt) {
 // ─── LASER ───
 function onLaserDown(e) {
   if (tool !== 'laser') return;
-  // In auto mode, only mouse activates laser (not finger)
-  if (autoMode && e.pointerType === 'touch') return;
+  if (e.pointerType === 'touch') return;
   e.preventDefault();
   e.stopPropagation();
   drawing = true;
@@ -335,7 +345,7 @@ function onLaserUp() {
   lastLaserPt = null;
 }
 
-// ─── STROKE RENDERING ───
+// ─── STROKE RENDERING (perfect-freehand) ───
 function redrawAll() {
   if (!ctx || !canvas) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -346,25 +356,59 @@ function redrawAll() {
 function drawStroke(s, cx) {
   if (s.pts.length < 2) return;
   cx.save();
-  cx.strokeStyle = s.color;
-  cx.lineWidth = s.size;
-  cx.lineCap = 'round';
-  cx.lineJoin = 'round';
-  cx.globalAlpha = s.tool === 'hl' ? 0.25 : 1;
-  cx.globalCompositeOperation = 'source-over';
-  cx.beginPath();
-  cx.moveTo(s.pts[0].x, s.pts[0].y);
-  for (let i = 1; i < s.pts.length; i++) {
-    cx.lineTo(s.pts[i].x, s.pts[i].y);
+
+  if (s.tool === 'hl') {
+    // Highlighter: semi-transparent, thicker, simple path (no freehand)
+    cx.globalAlpha = 0.25;
+    cx.strokeStyle = s.color;
+    cx.lineWidth = s.size * 3;
+    cx.lineCap = 'round';
+    cx.lineJoin = 'round';
+    cx.beginPath();
+    cx.moveTo(s.pts[0].x, s.pts[0].y);
+    for (let i = 1; i < s.pts.length; i++) {
+      cx.lineTo(s.pts[i].x, s.pts[i].y);
+    }
+    cx.stroke();
+  } else {
+    // Pen: use perfect-freehand for smooth, pressure-sensitive strokes
+    const inputPoints = s.pts.map(p => [p.x, p.y, p.p || 0.5]);
+    
+    const outlinePoints = getStroke(inputPoints, {
+      size: s.size * 2.5,
+      thinning: 0.5,       // How much pressure affects width
+      smoothing: 0.5,       // Smoothness of the stroke
+      streamline: 0.5,      // Reduces jitter
+      easing: (t) => t,     // Linear pressure response
+      start: { taper: 0, easing: (t) => t, cap: true },
+      end: { taper: 0, easing: (t) => t, cap: true },
+    });
+
+    if (outlinePoints.length < 2) {
+      cx.restore();
+      return;
+    }
+
+    // Render the polygon outline as a filled path
+    cx.fillStyle = s.color;
+    cx.globalAlpha = 1;
+    cx.beginPath();
+    cx.moveTo(outlinePoints[0][0], outlinePoints[0][1]);
+    
+    for (let i = 1; i < outlinePoints.length; i++) {
+      cx.lineTo(outlinePoints[i][0], outlinePoints[i][1]);
+    }
+    cx.closePath();
+    cx.fill();
   }
-  cx.stroke();
+
   cx.restore();
 }
 
 // ─── TOOL MANAGEMENT ───
 export function setAnnotationTool(t) {
   tool = t;
-  // Track last drawing tool for auto-mode
+  // Track last drawing tool for pen auto-activation
   if (t === 'pen' || t === 'hl' || t === 'eraser') {
     lastDrawTool = t;
   }
@@ -372,15 +416,15 @@ export function setAnnotationTool(t) {
   document.querySelectorAll('.ann-tool-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === t);
   });
-  // Canvas pointer events + cursor
+  // Canvas pointer events
   if (canvas) {
-    // Hand/None: canvas is transparent to events → navigation works
-    // Drawing tools: canvas captures events → drawing works
+    // Drawing tools: canvas captures pen/mouse events
+    // None/laser: canvas is transparent → clicks go to notebook for navigation
     const isDrawingTool = (t === 'pen' || t === 'hl' || t === 'eraser');
     canvas.style.pointerEvents = isDrawingTool ? 'auto' : 'none';
     updateCursor();
   }
-  // Laser overlay — z-index BELOW toolbar so toolbar is still clickable
+  // Laser overlay
   if (laserSvg) {
     laserSvg.style.pointerEvents = t === 'laser' ? 'auto' : 'none';
     laserSvg.style.display = t === 'laser' ? 'block' : 'none';
@@ -392,7 +436,7 @@ export function setAnnotationTool(t) {
   }
 }
 
-// ─── CUSTOM CURSOR (floating DOM element — works on iPad) ───
+// ─── FLOATING CURSOR (works on iPad) ───
 function updateCursor() {
   if (!cursorEl) return;
   if (tool === 'none') {
@@ -401,44 +445,43 @@ function updateCursor() {
     return;
   }
 
-  // Show floating cursor
   cursorEl.style.display = 'block';
 
   if (tool === 'laser') {
     const size = 20;
-    cursorEl.style.width = size + 'px';
-    cursorEl.style.height = size + 'px';
-    cursorEl.style.borderRadius = '50%';
-    cursorEl.style.background = 'rgba(255,59,48,0.3)';
-    cursorEl.style.border = '2px solid #ff3b30';
-    cursorEl.style.boxShadow = '0 0 8px rgba(255,59,48,0.5)';
+    Object.assign(cursorEl.style, {
+      width: size + 'px', height: size + 'px',
+      borderRadius: '50%',
+      background: 'rgba(255,59,48,0.3)',
+      border: '2px solid #ff3b30',
+      boxShadow: '0 0 8px rgba(255,59,48,0.5)',
+    });
   } else if (tool === 'eraser') {
     const size = Math.max(penSize * 8, 20);
-    cursorEl.style.width = size + 'px';
-    cursorEl.style.height = size + 'px';
-    cursorEl.style.borderRadius = '50%';
-    cursorEl.style.background = 'rgba(255,107,107,0.15)';
-    cursorEl.style.border = '2px solid rgba(255,107,107,0.6)';
-    cursorEl.style.boxShadow = 'none';
+    Object.assign(cursorEl.style, {
+      width: size + 'px', height: size + 'px',
+      borderRadius: '50%',
+      background: 'rgba(255,107,107,0.15)',
+      border: '2px solid rgba(255,107,107,0.6)',
+      boxShadow: 'none',
+    });
   } else {
     // Pen / Highlighter
     const size = Math.max((tool === 'hl' ? penSize * 6 : penSize * 2), 8);
-    cursorEl.style.width = size + 'px';
-    cursorEl.style.height = size + 'px';
-    cursorEl.style.borderRadius = '50%';
-    cursorEl.style.background = tool === 'hl' ? penColor + '40' : 'none';
-    cursorEl.style.border = `2px solid ${penColor}`;
-    cursorEl.style.boxShadow = 'none';
+    Object.assign(cursorEl.style, {
+      width: size + 'px', height: size + 'px',
+      borderRadius: '50%',
+      background: tool === 'hl' ? penColor + '40' : 'none',
+      border: `2px solid ${penColor}`,
+      boxShadow: 'none',
+    });
   }
 
-  // Also set CSS cursor to none so native cursor hides on desktop
   if (canvas) canvas.style.cursor = 'none';
 }
 
-// Track pointer for floating cursor position
 function onGlobalPointerMove(e) {
   if (!cursorEl || tool === 'none') return;
-  // Only show cursor for mouse and pen (not finger)
   if (e.pointerType === 'touch') {
     cursorEl.style.display = 'none';
     return;
@@ -450,34 +493,18 @@ function onGlobalPointerMove(e) {
   cursorEl.style.top = (e.clientY - h / 2) + 'px';
 }
 
-// ─── AUTO/MANUAL MODE ───
-export function toggleAutoMode() {
-  autoMode = !autoMode;
-  const modeBtn = document.querySelector('.ann-mode-btn');
-  if (modeBtn) {
-    modeBtn.textContent = autoMode ? '🅰️' : '🔧';
-    modeBtn.title = autoMode ? 'Auto Mode: Pencil draws, Finger navigates' : 'Manual Mode: Tool follows toolbar';
-    modeBtn.classList.toggle('active', autoMode);
-  }
-  // In auto mode, canvas always captures events; in manual, only when tool is active
-  if (canvas) {
-    const shouldCapture = autoMode || (tool !== 'none' && tool !== 'laser');
-    canvas.style.pointerEvents = shouldCapture ? 'auto' : 'none';
-  }
-}
-
 // ─── UNDO / REDO ───
 export function undoAnnotation() {
   if (!strokes.length) return;
   redoStack.push(strokes.pop());
-  redrawAll();
+  scheduleRedraw();
   saveAnnotations();
 }
 
 export function redoAnnotation() {
   if (!redoStack.length) return;
   strokes.push(redoStack.pop());
-  redrawAll();
+  scheduleRedraw();
   saveAnnotations();
 }
 
@@ -487,19 +514,16 @@ export function toggleVisibility() {
   canvas.style.opacity = visible ? '1' : '0';
   const eyeBtn = document.querySelector('.ann-tool-btn[data-tool="eye"]');
   if (eyeBtn) eyeBtn.textContent = visible ? '👁️' : '🚫';
-  redrawAll();
+  scheduleRedraw();
 }
 
 // ─── CLEAR ALL ───
 export function clearAnnotations() {
   strokes = [];
   redoStack = [];
-  redrawAll();
-  // Save empty state to localStorage immediately
-  try {
-    localStorage.setItem(getLocalKey(), '[]');
-  } catch {}
-  // Force push empty to cloud NOW (don't wait 60s)
+  scheduleRedraw();
+  // Save empty state immediately
+  try { localStorage.setItem(getLocalKey(), '[]'); } catch {}
   const key = getStorageKey();
   hasPendingCloudSave = false;
   clearTimeout(saveTimer);
@@ -521,56 +545,63 @@ function getLocalKey() {
 
 function saveAnnotations() {
   const data = JSON.stringify(strokes);
-
-  // 1. Instant localStorage save (always)
-  try {
-    localStorage.setItem(getLocalKey(), data);
-  } catch { /* quota exceeded */ }
-
+  // 1. Instant localStorage save
+  try { localStorage.setItem(getLocalKey(), data); } catch {}
   // 2. Debounced Firestore save (every 60 seconds)
   hasPendingCloudSave = true;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => flushToCloud(), 60000);
+  if (!saveTimer) {
+    saveTimer = setTimeout(async () => {
+      saveTimer = null;
+      if (hasPendingCloudSave) {
+        hasPendingCloudSave = false;
+        const key = getStorageKey();
+        const ok = await saveToCloud(key, strokes);
+        showSyncStatus(ok ? 'saved' : 'error');
+      }
+    }, 60000);
+  }
 }
 
-// Force push to Firestore (called on exercise change + every 60s)
-async function flushToCloud() {
-  if (!hasPendingCloudSave || strokes.length === 0) return;
-  hasPendingCloudSave = false;
-  clearTimeout(saveTimer);
-  const key = getStorageKey();
-  const ok = await saveToCloud(key, strokes);
-  showSyncStatus(ok ? 'saved' : 'error');
+// Force flush pending saves (called during exercise switch)
+export async function flushToCloud() {
+  if (hasPendingCloudSave) {
+    hasPendingCloudSave = false;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    const key = getStorageKey();
+    await saveToCloud(key, strokes);
+  }
 }
 
 async function loadAnnotations() {
   const localKey = getLocalKey();
-  const cloudKey = getStorageKey();
-
-  // 1. Load localStorage INSTANTLY (fast UX)
+  
+  // 1. Instant load from localStorage
   try {
-    const saved = JSON.parse(localStorage.getItem(localKey) || '[]');
-    strokes = saved;
-    redrawAll();
-  } catch { strokes = []; }
+    const local = localStorage.getItem(localKey);
+    if (local) {
+      strokes = JSON.parse(local);
+      scheduleRedraw();
+    }
+  } catch {}
 
-  // 2. Then try cloud (may override localStorage)
+  // 2. Sync with cloud (may have newer data from another device)
   try {
-    const cloudData = await loadFromCloud(cloudKey);
+    const key = getStorageKey();
+    const cloudData = await loadFromCloud(key);
     if (cloudData && cloudData.length > 0) {
       strokes = cloudData;
       try { localStorage.setItem(localKey, JSON.stringify(strokes)); } catch {}
       showSyncStatus('loaded');
-      redrawAll();
+      scheduleRedraw();
     } else if (strokes.length > 0) {
       showSyncStatus('local');
     }
   } catch {
-    // Cloud failed — localStorage data already loaded, just continue
+    // Cloud failed — localStorage data already loaded
   }
 }
 
-// Sync status indicator
 function showSyncStatus(status) {
   let indicator = document.getElementById('syncIndicator');
   if (!indicator) {
@@ -585,8 +616,8 @@ function showSyncStatus(status) {
   setTimeout(() => indicator.classList.remove('show'), 2000);
 }
 
+// ─── EXERCISE CHANGE ───
 export async function onExerciseChange() {
-  // Flush any pending annotations to cloud before switching
   await flushToCloud();
   strokes = [];
   redoStack = [];
@@ -596,7 +627,7 @@ export async function onExerciseChange() {
     canvas = document.createElement('canvas');
     canvas.className = 'annotation-canvas';
     canvas.id = 'annotationCanvas';
-    canvas.style.touchAction = 'auto'; // Allow finger scrolling
+    canvas.style.touchAction = 'none';
     notebook.appendChild(canvas);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
 
@@ -607,7 +638,6 @@ export async function onExerciseChange() {
     canvas.addEventListener('pointerleave', onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
 
-    // Resize canvas to match content
     resizeCanvas();
   }
 
@@ -617,7 +647,6 @@ export async function onExerciseChange() {
 // ─── KEYBOARD ───
 function onKey(e) {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  // Support both Ctrl (Windows) and Cmd (Mac/iPad) for undo/redo
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key === 'z') { e.preventDefault(); undoAnnotation(); }
   if (mod && e.key === 'y') { e.preventDefault(); redoAnnotation(); }
@@ -629,26 +658,11 @@ function buildToolbar() {
   toolbar.className = 'ann-toolbar';
   toolbar.id = 'annToolbar';
 
-  // Auto/Manual mode toggle — at the top
-  const modeBtn = document.createElement('button');
-  modeBtn.className = 'ann-tool-btn ann-mode-btn active';
-  modeBtn.textContent = '🅰️';
-  modeBtn.title = 'Auto Mode: Pencil draws, Finger navigates';
-  modeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleAutoMode();
-  });
-  toolbar.appendChild(modeBtn);
-
-  // Divider
-  toolbar.appendChild(makeDivider());
-
   // Tool buttons
   const tools = [
-    { id: 'hand', icon: '✋', title: 'Hand (Scroll & Navigate)' },
     { id: 'pen', icon: '✏️', title: 'Pen' },
     { id: 'hl', icon: '🖍️', title: 'Highlighter' },
-    { id: 'eraser', icon: '🧹', title: 'Eraser' },
+    { id: 'eraser', icon: '🧹', title: 'Eraser (or double-tap pen)' },
     { id: 'laser', icon: '📍', title: 'Laser Pointer' },
     { id: 'eye', icon: '👁️', title: 'Toggle Annotations' },
   ];
@@ -663,13 +677,8 @@ function buildToolbar() {
       e.stopPropagation();
       if (t.id === 'eye') {
         toggleVisibility();
-      } else if (t.id === 'hand') {
-        // Hand = deactivate everything, enable scroll/navigate
-        setAnnotationTool('none');
-        // Highlight hand button
-        document.querySelectorAll('.ann-tool-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
       } else {
+        // Toggle: click same tool = deactivate (none), click different = activate
         const newTool = tool === t.id ? 'none' : t.id;
         setAnnotationTool(newTool);
       }

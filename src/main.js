@@ -5,7 +5,7 @@
 import './style.css';
 import { parseMD, getExerciseById } from './parser.js';
 import { renderExercise, StepController } from './notebook.js';
-import { initAnnotations, onExerciseChange, isToolActive, isAutoMode, shouldNavigate } from './annotations.js';
+import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate } from './annotations.js';
 import { initPresenter } from './presenter.js';
 import { saveProgressToCloud, loadProgressFromCloud } from './firebase.js';
 
