@@ -109,10 +109,7 @@ export function initAnnotations(notebookEl) {
   canvas.addEventListener('pointerleave', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
 
-  // Laser events
-  laserSvg.addEventListener('pointerdown', onLaserDown);
-  laserSvg.addEventListener('pointermove', onLaserMove);
-  laserSvg.addEventListener('pointerup', onLaserUp);
+  // Laser: dot events are bound in createLaserDot() when first activated
 
   // Keyboard shortcuts
   document.addEventListener('keydown', onKey);
@@ -376,13 +373,64 @@ function eraseStrokeAt(pt) {
   }
 }
 
-// ─── LASER ───
+// ─── LASER (Draggable Floating Dot with Beam Trail) ───
+let laserDot = null;
+let laserDotPos = null;
+
+function createLaserDot() {
+  if (laserDot) return;
+  
+  // The red laser dot (draggable)
+  laserDot = document.createElement('div');
+  laserDot.id = 'laserDot';
+  Object.assign(laserDot.style, {
+    position: 'fixed',
+    width: '28px',
+    height: '28px',
+    borderRadius: '50%',
+    background: 'radial-gradient(circle, #ff3b30 0%, #ff6b6b 40%, rgba(255,59,48,0.6) 70%, transparent 100%)',
+    boxShadow: '0 0 20px rgba(255,59,48,0.8), 0 0 40px rgba(255,59,48,0.4), inset 0 0 8px rgba(255,255,255,0.3)',
+    cursor: 'grab',
+    zIndex: '145',
+    touchAction: 'none',
+    display: 'none',
+    transition: 'opacity 0.2s',
+  });
+  document.body.appendChild(laserDot);
+  
+  // Events on the dot
+  laserDot.addEventListener('pointerdown', onLaserDown);
+  laserDot.addEventListener('pointermove', onLaserMove);
+  laserDot.addEventListener('pointerup', onLaserUp);
+  laserDot.addEventListener('pointercancel', onLaserUp);
+}
+
+function showLaserDot() {
+  createLaserDot();
+  if (!laserDotPos) {
+    laserDotPos = { x: window.innerWidth / 2 - 14, y: window.innerHeight / 2 - 14 };
+  }
+  laserDot.style.left = laserDotPos.x + 'px';
+  laserDot.style.top = laserDotPos.y + 'px';
+  laserDot.style.display = 'block';
+  laserSvg.style.display = 'block';
+}
+
+function hideLaserDot() {
+  if (laserDot) laserDot.style.display = 'none';
+  laserSvg.style.display = 'none';
+  const svg = laserSvg?.querySelector('svg');
+  if (svg) svg.innerHTML = '';
+  laserSegments = [];
+}
+
 function onLaserDown(e) {
-  if (tool !== 'laser') return;
-  if (e.pointerType === 'touch') return;
+  if (e.pointerType === 'touch') return; // Finger: let scroll
   e.preventDefault();
   e.stopPropagation();
   drawing = true;
+  laserDot.setPointerCapture(e.pointerId);
+  laserDot.style.cursor = 'grabbing';
   lastLaserPt = { x: e.clientX, y: e.clientY };
   laserSegments = [];
 }
@@ -390,21 +438,33 @@ function onLaserDown(e) {
 function onLaserMove(e) {
   if (!drawing || tool !== 'laser') return;
   e.preventDefault();
+  e.stopPropagation();
+  
   const px = e.clientX, py = e.clientY;
+  
+  // Move the dot
+  const newX = Math.max(0, Math.min(window.innerWidth - 28, px - 14));
+  const newY = Math.max(0, Math.min(window.innerHeight - 28, py - 14));
+  laserDotPos = { x: newX, y: newY };
+  laserDot.style.left = newX + 'px';
+  laserDot.style.top = newY + 'px';
+  
+  // Add beam segment
   if (lastLaserPt && (Math.abs(lastLaserPt.x - px) > 1 || Math.abs(lastLaserPt.y - py) > 1)) {
     laserSegments.push({ id: laserSegId++, x1: lastLaserPt.x, y1: lastLaserPt.y, x2: px, y2: py });
     if (laserSegments.length > 60) laserSegments = laserSegments.slice(-60);
     const svg = laserSvg.querySelector('svg');
     svg.innerHTML = laserSegments.map(s =>
-      `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#ff3b30" stroke-width="2.5" stroke-linecap="round" style="animation:beamFade .8s forwards"/>`
+      `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#ff3b30" stroke-width="3" stroke-linecap="round" style="animation:beamFade .8s forwards"/>`
     ).join('');
   }
   lastLaserPt = { x: px, y: py };
 }
 
-function onLaserUp() {
+function onLaserUp(e) {
   drawing = false;
   lastLaserPt = null;
+  if (laserDot) laserDot.style.cursor = 'grab';
 }
 
 // ─── STROKE RENDERING (with offscreen cache for performance) ───
@@ -461,28 +521,45 @@ function drawStroke(s, cx) {
   cx.save();
 
   if (s.tool === 'hl') {
-    // Highlighter: semi-transparent, thicker, simple path (no freehand)
-    cx.globalAlpha = 0.25;
-    cx.strokeStyle = s.color;
-    cx.lineWidth = s.size * 3;
-    cx.lineCap = 'round';
-    cx.lineJoin = 'round';
-    cx.beginPath();
-    cx.moveTo(s.pts[0].x, s.pts[0].y);
-    for (let i = 1; i < s.pts.length; i++) {
-      cx.lineTo(s.pts[i].x, s.pts[i].y);
+    // Highlighter: draw at full opacity on a temp canvas, then composite with alpha.
+    // This prevents semi-transparent color stacking at line join points.
+    const hlCanvas = document.createElement('canvas');
+    hlCanvas.width = canvas.width;
+    hlCanvas.height = canvas.height;
+    const hlCtx = hlCanvas.getContext('2d');
+    
+    hlCtx.strokeStyle = s.color;
+    hlCtx.lineWidth = s.size * 4;
+    hlCtx.lineCap = 'round';
+    hlCtx.lineJoin = 'round';
+    hlCtx.globalAlpha = 1;
+    hlCtx.beginPath();
+    hlCtx.moveTo(s.pts[0].x, s.pts[0].y);
+    
+    // Use quadratic curves for smooth path (reduces jagged segments)
+    for (let i = 1; i < s.pts.length - 1; i++) {
+      const mx = (s.pts[i].x + s.pts[i + 1].x) / 2;
+      const my = (s.pts[i].y + s.pts[i + 1].y) / 2;
+      hlCtx.quadraticCurveTo(s.pts[i].x, s.pts[i].y, mx, my);
     }
-    cx.stroke();
+    // Last point
+    const last = s.pts[s.pts.length - 1];
+    hlCtx.lineTo(last.x, last.y);
+    hlCtx.stroke();
+    
+    // Composite onto main canvas with transparency
+    cx.globalAlpha = 0.25;
+    cx.drawImage(hlCanvas, 0, 0);
   } else {
     // Pen: use perfect-freehand for smooth, pressure-sensitive strokes
     const inputPoints = s.pts.map(p => [p.x, p.y, p.p || 0.5]);
     
     const outlinePoints = getStroke(inputPoints, {
       size: s.size * 2.5,
-      thinning: 0.5,       // How much pressure affects width
-      smoothing: 0.5,       // Smoothness of the stroke
-      streamline: 0.5,      // Reduces jitter
-      easing: (t) => t,     // Linear pressure response
+      thinning: 0.5,
+      smoothing: 0.5,
+      streamline: 0.5,
+      easing: (t) => t,
       start: { taper: 0, easing: (t) => t, cap: true },
       end: { taper: 0, easing: (t) => t, cap: true },
     });
@@ -492,7 +569,6 @@ function drawStroke(s, cx) {
       return;
     }
 
-    // Render the polygon outline as a filled path
     cx.fillStyle = s.color;
     cx.globalAlpha = 1;
     cx.beginPath();
@@ -520,22 +596,15 @@ export function setAnnotationTool(t) {
     btn.classList.toggle('active', btn.dataset.tool === t);
   });
   // Canvas pointer events — ALWAYS auto
-  // Pen events are captured by our handler (preventDefault + stopPropagation)
-  // Finger events pass through (no preventDefault) → browser scrolls
-  // Mouse events: handled by shouldDraw() check
   if (canvas) {
     canvas.style.pointerEvents = 'auto';
     updateCursor();
   }
-  // Laser overlay
-  if (laserSvg) {
-    laserSvg.style.pointerEvents = t === 'laser' ? 'auto' : 'none';
-    laserSvg.style.display = t === 'laser' ? 'block' : 'none';
-  }
-  if (t !== 'laser') {
-    laserSegments = [];
-    const svg = laserSvg?.querySelector('svg');
-    if (svg) svg.innerHTML = '';
+  // Laser: show/hide draggable dot
+  if (t === 'laser') {
+    showLaserDot();
+  } else {
+    hideLaserDot();
   }
 }
 

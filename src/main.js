@@ -324,6 +324,8 @@ const TAP_TIME_THRESHOLD = 500; // ms — more than this = long press, not tap
 
 // Track where finger/mouse lands (to detect scroll vs tap)
 document.getElementById('notebookContent').addEventListener('pointerdown', (e) => {
+  // PEN: NEVER participate in navigation
+  if (e.pointerType === 'pen') return;
   if (e.pointerType === 'touch') {
     fingerDownPos = { x: e.clientX, y: e.clientY };
     fingerDownTime = Date.now();
@@ -332,6 +334,9 @@ document.getElementById('notebookContent').addEventListener('pointerdown', (e) =
 
 document.getElementById('notebookContent').addEventListener('pointerup', (e) => {
   if (!state.stepCtrl) return;
+
+  // PEN: NEVER navigate — hard reject (safety net)
+  if (e.pointerType === 'pen') return;
 
   // Ask annotation engine: should this pointer type navigate?
   if (!shouldNavigate(e.pointerType)) return;

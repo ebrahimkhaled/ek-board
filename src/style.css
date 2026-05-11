@@ -47,6 +47,8 @@ body {
   padding: 24px 20px 80px;
   user-select: none;
   cursor: pointer;
+  /* Prevent Safari edge-swipe back/forward gesture */
+  overscroll-behavior: none;
 }
 
 /* ═══ NOTEBOOK PAGE ═══ */
@@ -532,10 +534,10 @@ body {
   display: none;
 }
 
-/* Laser beam fade animation */
+/* Laser beam fade animation (with glow) */
 @keyframes beamFade {
-  0%   { opacity: 1; stroke-width: 2.5px; }
-  100% { opacity: 0; stroke-width: 0.5px; }
+  0%   { opacity: 1; stroke-width: 12px; filter: drop-shadow(0 0 16px rgba(255, 59, 48, 1)); }
+  100% { opacity: 0; stroke-width: 2px; filter: drop-shadow(0 0 0px rgba(255, 59, 48, 0)); }
 }
 
 /* Floating Toolbar */
