@@ -462,13 +462,14 @@ function onPointerUp(e) {
 // ─── WHOLE-STROKE ERASER ───
 function eraseStrokeAt(pt) {
   const radius = penSize * 5;
+  const radiusSq = radius * radius;
   let erased = false;
   for (let i = strokes.length - 1; i >= 0; i--) {
     const stroke = strokes[i];
     for (const sp of stroke.pts) {
       const dx = sp.x - pt.x;
       const dy = sp.y - pt.y;
-      if (dx * dx + dy * dy < radius * radius) {
+      if (dx * dx + dy * dy < radiusSq) {
         redoStack.push(strokes.splice(i, 1)[0]);
         erased = true;
         break;
@@ -478,7 +479,8 @@ function eraseStrokeAt(pt) {
   if (erased) {
     cacheValid = false;  // Invalidate cache
     scheduleRedraw();
-    saveAnnotations();
+    // Intentionally omitted saveAnnotations() here to prevent main thread blocking
+    // during high-frequency pointermove dragging. It is handled by onPointerUp.
   }
 }
 
