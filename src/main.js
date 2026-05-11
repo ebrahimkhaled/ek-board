@@ -310,80 +310,66 @@ function saveStepProgress(chId, exId, step) {
 // ─── EVENT LISTENERS ───
 
 // ── NAVIGATION INPUT ──
-// INPUT RULES (set in annotations.js):
-//   Hand/None → everything navigates
-//   Pen → draws (when tool selected), navigates in hand mode
-//   Finger → ALWAYS navigates: TAP = next, DOUBLE-TAP = back, SCROLL = scroll
-//   Mouse → navigates only if no drawing tool active
+// RULES:
+//   Keyboard: Space = next, Shift+Space = prev (primary navigation)
+//   Finger: TAP = next, DOUBLE-TAP = back, SCROLL = scroll
+//   Pen: NEVER navigates (only draws)
+//   Mouse click: next step (when no draw tool active)
 
 let lastFingerTap = 0;
-let fingerDownPos = null;     // Track where finger touched down
-let fingerDownTime = 0;       // Track when finger touched down
-const TAP_MOVE_THRESHOLD = 15; // px — more than this = scroll, not tap
-const TAP_TIME_THRESHOLD = 500; // ms — more than this = long press, not tap
+let fingerDownPos = null;
+let fingerDownTime = 0;
+const TAP_MOVE_THRESHOLD = 15;
+const TAP_TIME_THRESHOLD = 500;
 
-// Track where finger/mouse lands (to detect scroll vs tap)
-document.getElementById('notebookContent').addEventListener('pointerdown', (e) => {
-  // PEN: NEVER participate in navigation
-  if (e.pointerType === 'pen') return;
-  if (e.pointerType === 'touch') {
-    fingerDownPos = { x: e.clientX, y: e.clientY };
-    fingerDownTime = Date.now();
-  }
-});
+// Use touch events for finger navigation (completely separate from pointer events)
+// This avoids all pen/mouse confusion since touchstart/end ONLY fire for fingers
+document.getElementById('notebookContent').addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return; // Single finger only
+  const t = e.touches[0];
+  fingerDownPos = { x: t.clientX, y: t.clientY };
+  fingerDownTime = Date.now();
+}, { passive: true });
 
-document.getElementById('notebookContent').addEventListener('pointerup', (e) => {
+document.getElementById('notebookContent').addEventListener('touchend', (e) => {
   if (!state.stepCtrl) return;
-
-  // PEN: NEVER navigate — hard reject (safety net)
-  if (e.pointerType === 'pen') return;
-
-  // ABSOLUTE GUARD: If pen is currently active (touching screen), block all navigation.
-  // This catches Safari quirks where pen events might arrive as different pointerTypes.
-  if (isPenActive()) return;
-
-  // Ask annotation engine: should this pointer type navigate?
-  if (!shouldNavigate(e.pointerType)) return;
-
-  // Finger: detect TAP vs SCROLL
-  if (e.pointerType === 'touch') {
-    // Check if this was a scroll (finger moved too much) or long press
-    if (fingerDownPos) {
-      const dx = Math.abs(e.clientX - fingerDownPos.x);
-      const dy = Math.abs(e.clientY - fingerDownPos.y);
-      const dt = Date.now() - fingerDownTime;
-      if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD || dt > TAP_TIME_THRESHOLD) {
-        // This was a scroll or long press — do NOT advance
-        fingerDownPos = null;
-        return;
-      }
-    }
-    fingerDownPos = null;
-
-    // It's a genuine TAP — check for double-tap
-    const now = Date.now();
-    if (now - lastFingerTap < 400) {
-      state.stepCtrl.prev();
-      lastFingerTap = 0;
-      return;
-    }
-    lastFingerTap = now;
-    setTimeout(() => {
-      if (lastFingerTap !== 0 && Date.now() - lastFingerTap >= 380) {
-        state.stepCtrl.next();
-      }
-    }, 400);
+  if (!fingerDownPos) return;
+  
+  const t = e.changedTouches[0];
+  const dx = Math.abs(t.clientX - fingerDownPos.x);
+  const dy = Math.abs(t.clientY - fingerDownPos.y);
+  const dt = Date.now() - fingerDownTime;
+  fingerDownPos = null;
+  
+  // Was it a scroll or long press?
+  if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD || dt > TAP_TIME_THRESHOLD) return;
+  
+  // It's a genuine TAP — check for double-tap
+  const now = Date.now();
+  if (now - lastFingerTap < 400) {
+    state.stepCtrl.prev();
+    lastFingerTap = 0;
     return;
   }
+  lastFingerTap = now;
+  setTimeout(() => {
+    if (lastFingerTap !== 0 && Date.now() - lastFingerTap >= 380) {
+      state.stepCtrl.next();
+    }
+  }, 400);
+}, { passive: true });
 
-  // Mouse: single click = next step
+// Mouse click = next step (only when no draw tool active)
+document.getElementById('notebookContent').addEventListener('click', (e) => {
+  if (!state.stepCtrl) return;
+  if (isToolActive()) return;
+  if (isPenActive()) return;
   state.stepCtrl.next();
 });
 
 // Mouse double-click = go back one step (only when no drawing tool active)
 document.getElementById('notebookContent').addEventListener('dblclick', (e) => {
   if (!state.stepCtrl) return;
-  // Don't navigate back if a drawing tool is actively capturing mouse
   if (isToolActive()) return;
   e.preventDefault();
   state.stepCtrl.prev();
@@ -417,10 +403,17 @@ document.addEventListener('keydown', (e) => {
 
   switch (e.key) {
     case 'ArrowRight':
-    case ' ':
     case 'Enter':
       e.preventDefault();
       state.stepCtrl.next();
+      break;
+    case ' ':
+      e.preventDefault();
+      if (e.shiftKey) {
+        state.stepCtrl.prev();  // Shift+Space = back
+      } else {
+        state.stepCtrl.next();  // Space = forward
+      }
       break;
     case 'ArrowLeft':
     case 'Backspace':

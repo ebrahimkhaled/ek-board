@@ -273,21 +273,9 @@ function onPointerDown(e) {
   e.preventDefault();
   e.stopPropagation();
 
-  // ── PEN double-tap: toggle pen ↔ eraser ──
-  if (e.pointerType === 'pen') {
-    const now = Date.now();
-    if (now - lastPenTapTime < 500) {
-      if (tool === 'pen' || tool === 'hl') {
-        prevTool = tool;
-        setAnnotationTool('eraser');
-      } else if (tool === 'eraser') {
-        setAnnotationTool(prevTool || 'pen');
-      }
-      lastPenTapTime = 0;
-      return;
-    }
-    lastPenTapTime = now;
-  }
+  // NOTE: Pen double-tap for eraser toggle is handled via Apple Pencil's
+  // hardware double-tap event, not via timing. Timing-based detection
+  // was causing writing lag (every 2nd fast stroke triggered eraser toggle).
 
   const p = getPos(e);
   drawing = true;
@@ -450,10 +438,10 @@ function onLaserMove(e) {
   // Add beam segment
   if (lastLaserPt && (Math.abs(lastLaserPt.x - px) > 1 || Math.abs(lastLaserPt.y - py) > 1)) {
     laserSegments.push({ id: laserSegId++, x1: lastLaserPt.x, y1: lastLaserPt.y, x2: px, y2: py });
-    if (laserSegments.length > 60) laserSegments = laserSegments.slice(-60);
+    if (laserSegments.length > 20) laserSegments = laserSegments.slice(-20);
     const svg = laserSvg.querySelector('svg');
     svg.innerHTML = laserSegments.map(s =>
-      `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#ff3b30" stroke-width="3" stroke-linecap="round" style="animation:beamFade .8s forwards"/>`
+      `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#ff3b30" stroke-width="3" stroke-linecap="round" opacity="0.6" style="animation:beamFade .5s forwards"/>`
     ).join('');
   }
   lastLaserPt = { x: px, y: py };
