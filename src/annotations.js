@@ -131,6 +131,15 @@ export function initAnnotations(notebookEl) {
   document.body.appendChild(cursorEl);
   document.addEventListener('pointermove', onGlobalPointerMove);
 
+  // ── PREVENT STYLUS GESTURE DELAY ──
+  // Instantly disables Safari's built-in touch gesture recognizer for Apple Pencil,
+  // ensuring strokes begin immediately with zero latency.
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches[0] && e.touches[0].touchType === 'stylus') {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
   // ── CRITICAL: Input routing at document capture level ──
   // This fires BEFORE any element-level handler.
   document.addEventListener('pointerdown', (e) => {
@@ -207,36 +216,33 @@ function resizeCanvas() {
   if (!canvas || !notebook) return;
   const w = notebook.scrollWidth;
   const h = notebook.scrollHeight;
-  if (canvas.width === w && canvas.height === h) return;
-  const imageData = (canvas.width > 0 && canvas.height > 0)
-    ? ctx?.getImageData(0, 0, canvas.width, canvas.height)
-    : null;
-  canvas.width = w;
-  canvas.height = h;
+  const dpr = window.devicePixelRatio || 1;
+  
+  if (canvas.width === Math.floor(w * dpr) && canvas.height === Math.floor(h * dpr)) return;
+  
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
-  if (imageData) ctx.putImageData(imageData, 0, 0);
+  
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  
   redrawAll();
 }
 
 // ─── COORDINATES ───
-// Maps visual (screen) coordinates → canvas buffer coordinates.
+// Maps visual (screen) coordinates → canvas CSS coordinates.
 // Reads CSS zoom directly from notebook — deterministic, no heuristics.
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   
-  // Read the CSS zoom level from the notebook
-  let zoom = 1;
-  if (notebook) {
-    const z = parseFloat(notebook.style.zoom);
-    if (z && !isNaN(z)) zoom = z;
-  }
-  
-  // getBoundingClientRect() returns zoomed dimensions in Chrome/Safari.
-  // clientX/clientY are in viewport coordinates.
-  // The ratio maps viewport → buffer coordinates.
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  // rect.width is the screen width (affected by zoom).
+  // We map it to the CSS pixel width (notebook.scrollWidth)
+  const cssWidth = notebook.scrollWidth;
+  const cssHeight = notebook.scrollHeight;
+  const scaleX = cssWidth / rect.width;
+  const scaleY = cssHeight / rect.height;
   
   return {
     x: (e.clientX - rect.left) * scaleX,
@@ -470,7 +476,8 @@ function bakeStrokeToCache(stroke) {
 // Rebuild entire cache from scratch (after undo, redo, erase, load)
 function rebuildCache() {
   ensureCacheCanvas();
-  cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+  const dpr = window.devicePixelRatio || 1;
+  cacheCtx.clearRect(0, 0, cacheCanvas.width / dpr, cacheCanvas.height / dpr);
   strokes.forEach(s => drawStroke(s, cacheCtx));
   cacheValid = true;
 }
@@ -483,8 +490,13 @@ function ensureCacheCanvas() {
   if (canvas && (cacheCanvas.width !== canvas.width || cacheCanvas.height !== canvas.height)) {
     cacheCanvas.width = canvas.width;
     cacheCanvas.height = canvas.height;
+    
+    const dpr = window.devicePixelRatio || 1;
+    cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
+    cacheCtx.scale(dpr, dpr);
+    
     // Size changed — must rebuild
-    cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+    cacheCtx.clearRect(0, 0, cacheCanvas.width / dpr, cacheCanvas.height / dpr);
     strokes.forEach(s => drawStroke(s, cacheCtx));
     cacheValid = true;
   }
@@ -492,16 +504,17 @@ function ensureCacheCanvas() {
 
 function redrawAll() {
   if (!ctx || !canvas) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
   if (!visible) return;
   
   // Draw from offscreen cache (fast: single drawImage call)
   if (cacheValid && cacheCanvas) {
-    ctx.drawImage(cacheCanvas, 0, 0);
+    ctx.drawImage(cacheCanvas, 0, 0, cacheCanvas.width / dpr, cacheCanvas.height / dpr);
   } else {
     // Fallback: draw all strokes directly + build cache
     rebuildCache();
-    ctx.drawImage(cacheCanvas, 0, 0);
+    ctx.drawImage(cacheCanvas, 0, 0, cacheCanvas.width / dpr, cacheCanvas.height / dpr);
   }
 }
 
@@ -516,6 +529,9 @@ function drawStroke(s, cx) {
     hlCanvas.width = canvas.width;
     hlCanvas.height = canvas.height;
     const hlCtx = hlCanvas.getContext('2d');
+    
+    const dpr = window.devicePixelRatio || 1;
+    hlCtx.scale(dpr, dpr);
     
     hlCtx.strokeStyle = s.color;
     hlCtx.lineWidth = s.size * 4;
@@ -538,7 +554,7 @@ function drawStroke(s, cx) {
     
     // Composite onto main canvas with transparency
     cx.globalAlpha = 0.25;
-    cx.drawImage(hlCanvas, 0, 0);
+    cx.drawImage(hlCanvas, 0, 0, hlCanvas.width / dpr, hlCanvas.height / dpr);
   } else {
     // Pen: use perfect-freehand for smooth, pressure-sensitive strokes
     const inputPoints = s.pts.map(p => [p.x, p.y, p.p || 0.5]);

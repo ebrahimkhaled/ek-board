@@ -327,6 +327,9 @@ const TAP_TIME_THRESHOLD = 500;
 document.getElementById('notebookContent').addEventListener('touchstart', (e) => {
   if (e.touches.length !== 1) return; // Single finger only
   const t = e.touches[0];
+  // IGNORING APPLE PENCIL: if it's a stylus, don't trigger touch navigation
+  if (t.touchType === 'stylus') return;
+  
   fingerDownPos = { x: t.clientX, y: t.clientY };
   fingerDownTime = Date.now();
 }, { passive: true });
@@ -336,6 +339,8 @@ document.getElementById('notebookContent').addEventListener('touchend', (e) => {
   if (!fingerDownPos) return;
   
   const t = e.changedTouches[0];
+  if (t.touchType === 'stylus') return; // IGNORING APPLE PENCIL
+  
   const dx = Math.abs(t.clientX - fingerDownPos.x);
   const dy = Math.abs(t.clientY - fingerDownPos.y);
   const dt = Date.now() - fingerDownTime;
