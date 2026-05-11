@@ -74,6 +74,8 @@ export function initAnnotations(notebookEl) {
   canvas = document.createElement('canvas');
   canvas.className = 'annotation-canvas';
   canvas.id = 'annotationCanvas';
+  // Allow finger scrolling through canvas (finger events are ignored by our handler)
+  canvas.style.touchAction = 'auto';
   notebook.appendChild(canvas);
 
   // Create laser SVG overlay — fixed to viewport, BELOW toolbar z-index
@@ -140,16 +142,42 @@ function resizeCanvas() {
 
 // ─── COORDINATES ───
 // Maps visual (screen) coordinates → canvas buffer coordinates.
-// Works correctly regardless of CSS zoom/transform on the notebook.
+// Handles CSS zoom on notebook by reading the computed zoom factor.
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
-  // Ratio accounts for any CSS scaling (zoom, transform, etc.)
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
-  };
+
+  // Get the CSS zoom level applied to the notebook
+  // Safari sometimes doesn't reflect zoom in getBoundingClientRect
+  let zoom = 1;
+  if (notebook) {
+    const z = parseFloat(notebook.style.zoom);
+    if (z && z !== 1) zoom = z;
+  }
+
+  // In some browsers, getBoundingClientRect already includes zoom.
+  // In others (Safari), it doesn't. Detect by comparing:
+  // If rect.width ≈ canvas.width * zoom → browser included zoom → use ratio directly
+  // If rect.width ≈ canvas.width → browser didn't include zoom → adjust manually
+  const expectedZoomed = canvas.width * zoom;
+  const browserIncludesZoom = Math.abs(rect.width - expectedZoomed) < Math.abs(rect.width - canvas.width);
+
+  if (browserIncludesZoom || zoom === 1) {
+    // Standard path: rect includes zoom, ratio maps correctly
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  } else {
+    // Safari fallback: rect doesn't include zoom, we compensate
+    const scaleX = canvas.width / (rect.width * zoom);
+    const scaleY = canvas.height / (rect.height * zoom);
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  }
 }
 
 // ─── INPUT DISCRIMINATION ───
@@ -568,6 +596,7 @@ export async function onExerciseChange() {
     canvas = document.createElement('canvas');
     canvas.className = 'annotation-canvas';
     canvas.id = 'annotationCanvas';
+    canvas.style.touchAction = 'auto'; // Allow finger scrolling
     notebook.appendChild(canvas);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
 
