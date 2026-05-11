@@ -57,18 +57,28 @@ let cursorEl = null;
 // requestAnimationFrame rendering
 let needsRedraw = false;
 
+// PEN ACTIVITY FLAG — set when pen is touching screen, cleared when lifted.
+// This is the ULTIMATE guard: main.js checks this flag and rejects navigation.
+// Even if Safari fires duplicate events that bypass stopPropagation, this flag
+// will always be correct because it's set/cleared at the document capture level.
+let penActive = false;
+
 // ─── PUBLIC API (used by main.js) ───
 export function isToolActive() {
   return tool !== 'none';
 }
 
-// Called by main.js to check if a pointer event should navigate
+// Called by main.js to check if navigation should happen
 export function shouldNavigate(pointerType) {
   if (pointerType === 'pen') return false;    // Pen NEVER navigates
+  if (penActive) return false;                // Pen is touching — block everything
   if (pointerType === 'touch') return true;   // Finger ALWAYS navigates
   // Mouse: navigates only if no drawing tool is active
   return !(tool === 'pen' || tool === 'hl' || tool === 'eraser');
 }
+
+// Check if pen is currently touching (for main.js safety check)
+export function isPenActive() { return penActive; }
 
 // Called to get current tool (for main.js)
 export function getCurrentTool() { return tool; }
@@ -121,51 +131,52 @@ export function initAnnotations(notebookEl) {
   document.body.appendChild(cursorEl);
   document.addEventListener('pointermove', onGlobalPointerMove);
 
-  // ── CRITICAL: iPad finger scroll fix ──
-  // Problem: canvas/laser with pointer-events:auto blocks finger scrolling on iPad Safari.
-  // Solution: Listen at document level. When FINGER touches, instantly make canvas AND
-  // laser overlay transparent so the touch falls through to the scrollable content.
-  // When PEN touches, keep canvas active so it captures the drawing.
+  // ── CRITICAL: Input routing at document capture level ──
+  // This fires BEFORE any element-level handler.
   document.addEventListener('pointerdown', (e) => {
     if (!canvas) return;
     showDebugInput(e.pointerType);  // Debug indicator
-    if (e.pointerType === 'touch') {
-      // Finger: make canvas AND laser invisible to events → browser scrolls the page
-      canvas.style.pointerEvents = 'none';
-      if (laserSvg) laserSvg.style.pointerEvents = 'none';
-    } else if (e.pointerType === 'pen') {
+    
+    if (e.pointerType === 'pen') {
+      // SET PEN ACTIVE FLAG — this blocks ALL navigation in main.js
+      penActive = true;
       // Pen: make canvas capture events → drawing works
       canvas.style.pointerEvents = 'auto';
       // Auto-activate drawing tool if none selected
       if (tool === 'none' || tool === 'laser') {
         setAnnotationTool(lastDrawTool || 'pen');
       }
+    } else if (e.pointerType === 'touch') {
+      // Finger: make canvas invisible to events → browser scrolls the page
+      canvas.style.pointerEvents = 'none';
     } else if (e.pointerType === 'mouse') {
       // Mouse: canvas auto (JS handler checks shouldDraw)
       canvas.style.pointerEvents = 'auto';
     }
-  }, true); // useCapture: fires before canvas handlers
+  }, true);
 
-  // CRITICAL: Globally block ALL pen pointerup from reaching main.js
-  // This prevents pen from triggering step advance even when pen lifts
-  // outside the canvas (e.g., after a long horizontal stroke)
+  // Pen up: clear flag + block propagation
   document.addEventListener('pointerup', (e) => {
     if (e.pointerType === 'pen') {
+      // Clear pen flag after a tiny delay (so any queued events still see it as active)
+      setTimeout(() => { penActive = false; }, 100);
       e.stopPropagation();
+      e.preventDefault();
     }
-    // Finger: keep canvas pointer-events OFF. It will be re-enabled
-    // only when the next PEN event comes in (see pointerdown above).
-    // This ensures finger always falls through to the scrollable notebook.
-    if (e.pointerType === 'touch' && laserSvg && tool === 'laser') {
-      // Re-enable laser overlay only (canvas stays off for finger)
-      setTimeout(() => {
-        if (laserSvg && tool === 'laser') laserSvg.style.pointerEvents = 'auto';
-      }, 50);
+  }, true);
+
+  // Also catch pointercancel (pen can be cancelled by system gestures)
+  document.addEventListener('pointercancel', (e) => {
+    if (e.pointerType === 'pen') {
+      setTimeout(() => { penActive = false; }, 100);
     }
   }, true);
 
   // Build toolbar
   buildToolbar();
+
+  // Create laser pointer dot (always visible)
+  createLaserDot();
 
   // Load saved annotations
   loadAnnotations();
@@ -373,14 +384,15 @@ function eraseStrokeAt(pt) {
   }
 }
 
-// ─── LASER (Draggable Floating Dot with Beam Trail) ───
+// ─── LASER POINTER (Always-Visible Draggable Dot with Beam Trail) ───
 let laserDot = null;
 let laserDotPos = null;
+let laserDragging = false;
 
 function createLaserDot() {
   if (laserDot) return;
   
-  // The red laser dot (draggable)
+  // The red laser dot (always visible, draggable by any input)
   laserDot = document.createElement('div');
   laserDot.id = 'laserDot';
   Object.assign(laserDot.style, {
@@ -393,50 +405,36 @@ function createLaserDot() {
     cursor: 'grab',
     zIndex: '145',
     touchAction: 'none',
-    display: 'none',
-    transition: 'opacity 0.2s',
   });
+  
+  // Default position: bottom-right area
+  laserDotPos = { x: window.innerWidth - 80, y: window.innerHeight / 2 };
+  laserDot.style.left = laserDotPos.x + 'px';
+  laserDot.style.top = laserDotPos.y + 'px';
+  
   document.body.appendChild(laserDot);
   
-  // Events on the dot
+  // Events on the dot — all pointer types can drag
   laserDot.addEventListener('pointerdown', onLaserDown);
   laserDot.addEventListener('pointermove', onLaserMove);
   laserDot.addEventListener('pointerup', onLaserUp);
   laserDot.addEventListener('pointercancel', onLaserUp);
 }
 
-function showLaserDot() {
-  createLaserDot();
-  if (!laserDotPos) {
-    laserDotPos = { x: window.innerWidth / 2 - 14, y: window.innerHeight / 2 - 14 };
-  }
-  laserDot.style.left = laserDotPos.x + 'px';
-  laserDot.style.top = laserDotPos.y + 'px';
-  laserDot.style.display = 'block';
+function onLaserDown(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  laserDragging = true;
+  laserDot.setPointerCapture(e.pointerId);
+  laserDot.style.cursor = 'grabbing';
+  laserDot.style.transform = 'scale(1.3)';
+  lastLaserPt = { x: e.clientX, y: e.clientY };
+  laserSegments = [];
   laserSvg.style.display = 'block';
 }
 
-function hideLaserDot() {
-  if (laserDot) laserDot.style.display = 'none';
-  laserSvg.style.display = 'none';
-  const svg = laserSvg?.querySelector('svg');
-  if (svg) svg.innerHTML = '';
-  laserSegments = [];
-}
-
-function onLaserDown(e) {
-  if (e.pointerType === 'touch') return; // Finger: let scroll
-  e.preventDefault();
-  e.stopPropagation();
-  drawing = true;
-  laserDot.setPointerCapture(e.pointerId);
-  laserDot.style.cursor = 'grabbing';
-  lastLaserPt = { x: e.clientX, y: e.clientY };
-  laserSegments = [];
-}
-
 function onLaserMove(e) {
-  if (!drawing || tool !== 'laser') return;
+  if (!laserDragging) return;
   e.preventDefault();
   e.stopPropagation();
   
@@ -462,9 +460,12 @@ function onLaserMove(e) {
 }
 
 function onLaserUp(e) {
-  drawing = false;
+  laserDragging = false;
   lastLaserPt = null;
-  if (laserDot) laserDot.style.cursor = 'grab';
+  if (laserDot) {
+    laserDot.style.cursor = 'grab';
+    laserDot.style.transform = 'scale(1)';
+  }
 }
 
 // ─── STROKE RENDERING (with offscreen cache for performance) ───
@@ -600,14 +601,7 @@ export function setAnnotationTool(t) {
     canvas.style.pointerEvents = 'auto';
     updateCursor();
   }
-  // Laser: show/hide draggable dot
-  if (t === 'laser') {
-    showLaserDot();
-  } else {
-    hideLaserDot();
-  }
 }
-
 // ─── FLOATING CURSOR (works on iPad) ───
 function updateCursor() {
   if (!cursorEl) return;
@@ -841,12 +835,11 @@ function buildToolbar() {
   toolbar.className = 'ann-toolbar';
   toolbar.id = 'annToolbar';
 
-  // Tool buttons
+  // Tool buttons (laser is now always-visible floating dot, not a tool)
   const tools = [
     { id: 'pen', icon: '✏️', title: 'Pen' },
     { id: 'hl', icon: '🖍️', title: 'Highlighter' },
     { id: 'eraser', icon: '🧹', title: 'Eraser (or double-tap pen)' },
-    { id: 'laser', icon: '📍', title: 'Laser Pointer' },
     { id: 'eye', icon: '👁️', title: 'Toggle Annotations' },
   ];
 

@@ -5,7 +5,7 @@
 import './style.css';
 import { parseMD, getExerciseById } from './parser.js';
 import { renderExercise, StepController } from './notebook.js';
-import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate } from './annotations.js';
+import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate, isPenActive } from './annotations.js';
 import { initPresenter } from './presenter.js';
 import { saveProgressToCloud, loadProgressFromCloud } from './firebase.js';
 
@@ -337,6 +337,10 @@ document.getElementById('notebookContent').addEventListener('pointerup', (e) => 
 
   // PEN: NEVER navigate — hard reject (safety net)
   if (e.pointerType === 'pen') return;
+
+  // ABSOLUTE GUARD: If pen is currently active (touching screen), block all navigation.
+  // This catches Safari quirks where pen events might arrive as different pointerTypes.
+  if (isPenActive()) return;
 
   // Ask annotation engine: should this pointer type navigate?
   if (!shouldNavigate(e.pointerType)) return;
