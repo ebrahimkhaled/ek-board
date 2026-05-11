@@ -15,7 +15,7 @@ const chapters = [
   {
     id: 'ch1',
     title: 'Chapter 1: Linear Algebra & Inner Products',
-    file: '/data/ch1/Ch1_Exercises_SOLVED.md'
+    file: './data/ch1/Ch1_Exercises_SOLVED.md'
   }
   // { id: 'ch2', title: 'Chapter 2: ...', file: '/data/ch2/Ch2_Exercises_SOLVED.md' },
 ];

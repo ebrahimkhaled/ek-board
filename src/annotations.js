@@ -66,7 +66,7 @@ export function initAnnotations(notebookEl) {
   laserSvg.innerHTML = '<svg id="laserSvg" style="width:100%;height:100%"></svg>';
   document.body.appendChild(laserSvg);
 
-  ctx = canvas.getContext('2d');
+  ctx = canvas.getContext('2d', { willReadFrequently: true });
 
   // Size canvas to content
   resizeCanvas();
@@ -465,7 +465,7 @@ export async function onExerciseChange() {
     canvas.className = 'annotation-canvas';
     canvas.id = 'annotationCanvas';
     notebook.appendChild(canvas);
-    ctx = canvas.getContext('2d');
+    ctx = canvas.getContext('2d', { willReadFrequently: true });
 
     // Re-attach pointer events to new canvas
     canvas.addEventListener('pointerdown', onPointerDown);
