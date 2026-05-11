@@ -311,11 +311,24 @@ function saveStepProgress(chId, exId, step) {
 
 // ── NAVIGATION INPUT ──
 // INPUT RULES (set in annotations.js):
-//   Pen → NEVER navigates (always draws)
-//   Finger → ALWAYS navigates (tap=next, double-tap=back)
+//   Hand/None → everything navigates
+//   Pen → draws (when tool selected), navigates in hand mode
+//   Finger → ALWAYS navigates: TAP = next, DOUBLE-TAP = back, SCROLL = scroll
 //   Mouse → navigates only if no drawing tool active
 
 let lastFingerTap = 0;
+let fingerDownPos = null;     // Track where finger touched down
+let fingerDownTime = 0;       // Track when finger touched down
+const TAP_MOVE_THRESHOLD = 15; // px — more than this = scroll, not tap
+const TAP_TIME_THRESHOLD = 500; // ms — more than this = long press, not tap
+
+// Track where finger/mouse lands (to detect scroll vs tap)
+document.getElementById('notebookContent').addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch') {
+    fingerDownPos = { x: e.clientX, y: e.clientY };
+    fingerDownTime = Date.now();
+  }
+});
 
 document.getElementById('notebookContent').addEventListener('pointerup', (e) => {
   if (!state.stepCtrl) return;
@@ -323,8 +336,22 @@ document.getElementById('notebookContent').addEventListener('pointerup', (e) => 
   // Ask annotation engine: should this pointer type navigate?
   if (!shouldNavigate(e.pointerType)) return;
 
-  // Finger: single tap = next, double-tap = back (with delay)
+  // Finger: detect TAP vs SCROLL
   if (e.pointerType === 'touch') {
+    // Check if this was a scroll (finger moved too much) or long press
+    if (fingerDownPos) {
+      const dx = Math.abs(e.clientX - fingerDownPos.x);
+      const dy = Math.abs(e.clientY - fingerDownPos.y);
+      const dt = Date.now() - fingerDownTime;
+      if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD || dt > TAP_TIME_THRESHOLD) {
+        // This was a scroll or long press — do NOT advance
+        fingerDownPos = null;
+        return;
+      }
+    }
+    fingerDownPos = null;
+
+    // It's a genuine TAP — check for double-tap
     const now = Date.now();
     if (now - lastFingerTap < 400) {
       state.stepCtrl.prev();
