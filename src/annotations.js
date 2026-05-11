@@ -39,6 +39,9 @@ let prevTool = 'pen';
 // Last used drawing tool (for auto-mode stylus activation)
 let lastDrawTool = 'pen';
 
+// Floating cursor element (works on iPad unlike CSS cursors)
+let cursorEl = null;
+
 // ─── PUBLIC API ───
 // Called by main.js to check if a tool is active
 export function isToolActive() {
@@ -87,6 +90,16 @@ export function initAnnotations(notebookEl) {
 
   // Keyboard shortcuts
   document.addEventListener('keydown', onKey);
+
+  // Create floating cursor element (iPad doesn't support CSS custom cursors)
+  cursorEl = document.createElement('div');
+  cursorEl.id = 'floatingCursor';
+  cursorEl.className = 'floating-cursor';
+  document.body.appendChild(cursorEl);
+
+  // Track pointer movement globally for cursor position
+  document.addEventListener('pointermove', onGlobalPointerMove);
+  document.addEventListener('pointerleave', () => { if (cursorEl) cursorEl.style.display = 'none'; });
 
   // Build toolbar
   buildToolbar();
@@ -156,7 +169,7 @@ function onPointerDown(e) {
   // Double-tap detection for stylus: toggle pen ↔ eraser
   if (e.pointerType === 'pen') {
     const now = Date.now();
-    if (now - lastTapTime < 300) {
+    if (now - lastTapTime < 500) {
       if (tool === 'pen' || tool === 'hl') {
         prevTool = tool;
         setAnnotationTool('eraser');
@@ -331,37 +344,62 @@ export function setAnnotationTool(t) {
   }
 }
 
-// ─── CUSTOM CURSOR ───
+// ─── CUSTOM CURSOR (floating DOM element — works on iPad) ───
 function updateCursor() {
-  if (!canvas) return;
+  if (!cursorEl) return;
   if (tool === 'none') {
-    canvas.style.cursor = 'default';
+    cursorEl.style.display = 'none';
+    if (canvas) canvas.style.cursor = 'default';
     return;
   }
+
+  // Show floating cursor
+  cursorEl.style.display = 'block';
+
   if (tool === 'laser') {
-    // Laser cursor: red dot with glow
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'>
-      <circle cx='12' cy='12' r='4' fill='%23ff3b30'/>
-      <circle cx='12' cy='12' r='8' fill='none' stroke='%23ff3b30' stroke-width='1' opacity='0.4'/>
-      <circle cx='12' cy='12' r='11' fill='none' stroke='%23ff3b30' stroke-width='0.5' opacity='0.2'/>
-    </svg>`;
-    canvas.style.cursor = `url("data:image/svg+xml,${svg.trim()}") 12 12, crosshair`;
-    return;
+    const size = 20;
+    cursorEl.style.width = size + 'px';
+    cursorEl.style.height = size + 'px';
+    cursorEl.style.borderRadius = '50%';
+    cursorEl.style.background = 'rgba(255,59,48,0.3)';
+    cursorEl.style.border = '2px solid #ff3b30';
+    cursorEl.style.boxShadow = '0 0 8px rgba(255,59,48,0.5)';
+  } else if (tool === 'eraser') {
+    const size = Math.max(penSize * 8, 20);
+    cursorEl.style.width = size + 'px';
+    cursorEl.style.height = size + 'px';
+    cursorEl.style.borderRadius = '50%';
+    cursorEl.style.background = 'rgba(255,107,107,0.15)';
+    cursorEl.style.border = '2px solid rgba(255,107,107,0.6)';
+    cursorEl.style.boxShadow = 'none';
+  } else {
+    // Pen / Highlighter
+    const size = Math.max((tool === 'hl' ? penSize * 6 : penSize * 2), 8);
+    cursorEl.style.width = size + 'px';
+    cursorEl.style.height = size + 'px';
+    cursorEl.style.borderRadius = '50%';
+    cursorEl.style.background = tool === 'hl' ? penColor + '40' : 'none';
+    cursorEl.style.border = `2px solid ${penColor}`;
+    cursorEl.style.boxShadow = 'none';
   }
 
-  const size = tool === 'eraser' ? penSize * 4 : tool === 'hl' ? penSize * 3 : penSize;
-  const displaySize = Math.max(size * 2, 8);
-  const half = displaySize / 2;
-  const color = tool === 'eraser' ? '%23ff6b6b' : encodeURIComponent(penColor);
-  const opacity = tool === 'hl' ? 0.4 : tool === 'eraser' ? 0.5 : 0.8;
-  const fill = tool === 'eraser' ? 'rgba(255,107,107,0.2)' : 'none';
+  // Also set CSS cursor to none so native cursor hides on desktop
+  if (canvas) canvas.style.cursor = 'none';
+}
 
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${displaySize + 2}' height='${displaySize + 2}'>
-    <circle cx='${half + 1}' cy='${half + 1}' r='${half}'
-      fill='${fill}' stroke='${color}' stroke-width='1.5' opacity='${opacity}'/>
-  </svg>`;
-
-  canvas.style.cursor = `url("data:image/svg+xml,${svg.trim()}") ${half + 1} ${half + 1}, crosshair`;
+// Track pointer for floating cursor position
+function onGlobalPointerMove(e) {
+  if (!cursorEl || tool === 'none') return;
+  // Only show cursor for mouse and pen (not finger)
+  if (e.pointerType === 'touch') {
+    cursorEl.style.display = 'none';
+    return;
+  }
+  cursorEl.style.display = 'block';
+  const w = parseInt(cursorEl.style.width) || 12;
+  const h = parseInt(cursorEl.style.height) || 12;
+  cursorEl.style.left = (e.clientX - w / 2) + 'px';
+  cursorEl.style.top = (e.clientY - h / 2) + 'px';
 }
 
 // ─── AUTO/MANUAL MODE ───
@@ -530,8 +568,10 @@ export async function onExerciseChange() {
 // ─── KEYBOARD ───
 function onKey(e) {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoAnnotation(); }
-  if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redoAnnotation(); }
+  // Support both Ctrl (Windows) and Cmd (Mac/iPad) for undo/redo
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key === 'z') { e.preventDefault(); undoAnnotation(); }
+  if (mod && e.key === 'y') { e.preventDefault(); redoAnnotation(); }
 }
 
 // ─── BUILD TOOLBAR ───

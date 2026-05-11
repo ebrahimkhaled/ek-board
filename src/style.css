@@ -647,6 +647,17 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ═══ FLOATING CURSOR (iPad-compatible) ═══ */
+.floating-cursor {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  display: none;
+  border-radius: 50%;
+  transition: width 0.15s, height 0.15s, border-color 0.15s;
+  will-change: left, top;
+}
+
 /* ═══ PRESENTER MODE ═══ */
 
 /* Fullscreen body */
