@@ -173,35 +173,73 @@ function onPointerDown(e) {
   drawing = true;
   redoStack = [];
 
+  // ERASER: whole-stroke deletion mode
+  if (tool === 'eraser') {
+    eraseStrokeAt(p);
+    return;
+  }
+
   const activeTool = tool;
   curStroke = {
     tool: activeTool,
-    color: activeTool === 'eraser' ? '#000' : penColor,
-    size: activeTool === 'eraser' ? penSize * 4 : activeTool === 'hl' ? penSize * 3 : penSize,
+    color: penColor,
+    size: activeTool === 'hl' ? penSize * 3 : penSize,
     pts: [p]
   };
 }
 
 function onPointerMove(e) {
-  if (!drawing || !curStroke) return;
+  if (!drawing) return;
   if (!shouldDraw(e)) return;
   e.preventDefault();
   e.stopPropagation();
   const p = getPos(e);
+
+  // ERASER: keep deleting strokes as we drag
+  if (tool === 'eraser') {
+    eraseStrokeAt(p);
+    return;
+  }
+
+  if (!curStroke) return;
   curStroke.pts.push(p);
   redrawAll();
   drawStroke(curStroke, ctx);
 }
 
 function onPointerUp(e) {
-  if (!drawing || !curStroke) return;
+  if (!drawing) return;
   drawing = false;
-  if (curStroke.pts.length >= 2) {
+  if (curStroke && curStroke.pts.length >= 2) {
     strokes.push(curStroke);
   }
   curStroke = null;
   redrawAll();
   saveAnnotations();
+}
+
+// ─── WHOLE-STROKE ERASER ───
+// Finds any stroke within eraser radius and removes the entire stroke
+function eraseStrokeAt(pt) {
+  const radius = penSize * 5; // eraser hit area
+  let erased = false;
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const stroke = strokes[i];
+    for (const sp of stroke.pts) {
+      const dx = sp.x - pt.x;
+      const dy = sp.y - pt.y;
+      if (dx * dx + dy * dy < radius * radius) {
+        // Remove entire stroke, push to redo
+        redoStack.push(strokes.splice(i, 1)[0]);
+        erased = true;
+        break;
+      }
+    }
+  }
+  if (erased) {
+    redrawAll();
+    saveAnnotations();
+  }
 }
 
 // ─── LASER ───
@@ -252,7 +290,7 @@ function drawStroke(s, cx) {
   cx.lineCap = 'round';
   cx.lineJoin = 'round';
   cx.globalAlpha = s.tool === 'hl' ? 0.25 : 1;
-  cx.globalCompositeOperation = s.tool === 'eraser' ? 'destination-out' : 'source-over';
+  cx.globalCompositeOperation = 'source-over';
   cx.beginPath();
   cx.moveTo(s.pts[0].x, s.pts[0].y);
   for (let i = 1; i < s.pts.length; i++) {
@@ -371,7 +409,15 @@ export function clearAnnotations() {
   strokes = [];
   redoStack = [];
   redrawAll();
-  saveAnnotations();
+  // Save empty state to localStorage immediately
+  try {
+    localStorage.setItem(getLocalKey(), '[]');
+  } catch {}
+  // Force push empty to cloud NOW (don't wait 60s)
+  const key = getStorageKey();
+  hasPendingCloudSave = false;
+  clearTimeout(saveTimer);
+  saveToCloud(key, []).then(ok => showSyncStatus(ok ? 'saved' : 'error'));
 }
 
 // ─── PERSISTENCE (localStorage instant + Firestore every 60s) ───
