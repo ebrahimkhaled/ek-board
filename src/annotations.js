@@ -124,15 +124,17 @@ export function initAnnotations(notebookEl) {
   document.addEventListener('pointermove', onGlobalPointerMove);
 
   // ── CRITICAL: iPad finger scroll fix ──
-  // Problem: canvas with pointer-events:auto blocks finger scrolling on iPad Safari.
-  // Solution: Listen at document level. When FINGER touches, instantly make canvas
-  // transparent so the touch falls through to the scrollable content underneath.
+  // Problem: canvas/laser with pointer-events:auto blocks finger scrolling on iPad Safari.
+  // Solution: Listen at document level. When FINGER touches, instantly make canvas AND
+  // laser overlay transparent so the touch falls through to the scrollable content.
   // When PEN touches, keep canvas active so it captures the drawing.
   document.addEventListener('pointerdown', (e) => {
     if (!canvas) return;
+    showDebugInput(e.pointerType);  // Debug indicator
     if (e.pointerType === 'touch') {
-      // Finger: make canvas invisible to events → browser scrolls the page
+      // Finger: make canvas AND laser invisible to events → browser scrolls the page
       canvas.style.pointerEvents = 'none';
+      if (laserSvg) laserSvg.style.pointerEvents = 'none';
     } else if (e.pointerType === 'pen') {
       // Pen: make canvas capture events → drawing works
       canvas.style.pointerEvents = 'auto';
@@ -140,16 +142,21 @@ export function initAnnotations(notebookEl) {
       if (tool === 'none' || tool === 'laser') {
         setAnnotationTool(lastDrawTool || 'pen');
       }
+    } else if (e.pointerType === 'mouse') {
+      // Mouse: canvas auto (JS handler checks shouldDraw)
+      canvas.style.pointerEvents = 'auto';
     }
   }, true); // useCapture: fires before canvas handlers
 
-  // Re-enable canvas pointer-events after finger lift
+  // Re-enable canvas/laser pointer-events after finger lift
   document.addEventListener('pointerup', (e) => {
     if (!canvas) return;
     if (e.pointerType === 'touch') {
       // Small delay to avoid re-capturing the same touch
       setTimeout(() => {
         if (canvas) canvas.style.pointerEvents = 'auto';
+        // Re-enable laser if laser tool is active
+        if (laserSvg && tool === 'laser') laserSvg.style.pointerEvents = 'auto';
       }, 50);
     }
   }, true);
@@ -798,6 +805,18 @@ function buildToolbar() {
   clearBtn.addEventListener('click', (e) => { e.stopPropagation(); clearAnnotations(); });
   toolbar.appendChild(clearBtn);
 
+  // Debug toggle button
+  const debugBtn = document.createElement('button');
+  debugBtn.className = 'ann-tool-btn';
+  debugBtn.textContent = '🔍';
+  debugBtn.title = 'Debug: Show Input Type';
+  debugBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const on = toggleDebug();
+    debugBtn.classList.toggle('active', on);
+  });
+  toolbar.appendChild(debugBtn);
+
   document.body.appendChild(toolbar);
 }
 
@@ -805,4 +824,59 @@ function makeDivider() {
   const d = document.createElement('div');
   d.className = 'ann-divider';
   return d;
+}
+
+// ─── DEBUG INPUT INDICATOR ───
+let debugEl = null;
+let debugTimer = null;
+let debugEnabled = false;
+
+function showDebugInput(pointerType) {
+  if (!debugEnabled) return;
+  if (!debugEl) {
+    debugEl = document.createElement('div');
+    debugEl.id = 'inputDebug';
+    Object.assign(debugEl.style, {
+      position: 'fixed',
+      top: '12px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      padding: '8px 20px',
+      borderRadius: '12px',
+      fontSize: '1rem',
+      fontWeight: '700',
+      fontFamily: 'Inter, sans-serif',
+      zIndex: '9999',
+      pointerEvents: 'none',
+      transition: 'opacity 0.3s',
+      backdropFilter: 'blur(8px)',
+      border: '2px solid',
+    });
+    document.body.appendChild(debugEl);
+  }
+
+  const config = {
+    pen:   { icon: '🖊️', label: 'PEN (Apple Pencil)', bg: 'rgba(13,148,136,0.9)', border: '#0d9488', color: '#fff' },
+    touch: { icon: '👆', label: 'FINGER (Touch)', bg: 'rgba(59,130,246,0.9)', border: '#3b82f6', color: '#fff' },
+    mouse: { icon: '🖱️', label: 'MOUSE', bg: 'rgba(139,92,246,0.9)', border: '#8b5cf6', color: '#fff' },
+  };
+  const c = config[pointerType] || config.mouse;
+  debugEl.textContent = `${c.icon}  ${c.label}`;
+  debugEl.style.background = c.bg;
+  debugEl.style.borderColor = c.border;
+  debugEl.style.color = c.color;
+  debugEl.style.opacity = '1';
+
+  clearTimeout(debugTimer);
+  debugTimer = setTimeout(() => {
+    if (debugEl) debugEl.style.opacity = '0';
+  }, 1500);
+}
+
+export function toggleDebug() {
+  debugEnabled = !debugEnabled;
+  if (!debugEnabled && debugEl) {
+    debugEl.style.opacity = '0';
+  }
+  return debugEnabled;
 }
