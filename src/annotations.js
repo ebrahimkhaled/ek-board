@@ -21,7 +21,60 @@
  * Persistence: localStorage (instant) + Firestore (60s debounced cloud sync)
  */
 import { getStroke } from 'perfect-freehand';
-import { saveToCloud, loadFromCloud } from './firebase.js';
+import { saveToCloud, loadFromCloud, saveSettingsToCloud, loadSettingsFromCloud } from './firebase.js';
+
+// ─── GLOBAL SETTINGS SYNC ───
+export let globalSettings = {
+  penSize: 3,
+  textScale: 1,
+  laserX: 0.8,
+  laserY: 0.5
+};
+
+let settingsSaveTimer = null;
+function saveSettings() {
+  try { localStorage.setItem('ekboard_settings', JSON.stringify(globalSettings)); } catch {}
+  if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = setTimeout(async () => {
+    await saveSettingsToCloud(globalSettings);
+  }, 2000);
+}
+
+async function loadSettings() {
+  try {
+    const local = localStorage.getItem('ekboard_settings');
+    if (local) Object.assign(globalSettings, JSON.parse(local));
+  } catch {}
+  
+  try {
+    const cloud = await loadSettingsFromCloud();
+    if (cloud) {
+      Object.assign(globalSettings, cloud);
+      try { localStorage.setItem('ekboard_settings', JSON.stringify(globalSettings)); } catch {}
+    }
+  } catch {}
+  
+  applySettings();
+}
+
+function applySettings() {
+  penSize = globalSettings.penSize;
+  const brushSlider = document.querySelector('.ann-size-slider[title="Brush Size"]');
+  if (brushSlider) brushSlider.value = penSize;
+  
+  document.documentElement.style.setProperty('--text-scale', globalSettings.textScale);
+  const textSlider = document.querySelector('.ann-size-slider[title="Adjust Text Size"]');
+  if (textSlider) textSlider.value = globalSettings.textScale;
+  setTimeout(resizeCanvas, 50);
+  
+  if (laserDot) {
+    const px = Math.min(window.innerWidth - 28, Math.max(0, window.innerWidth * globalSettings.laserX));
+    const py = Math.min(window.innerHeight - 28, Math.max(0, window.innerHeight * globalSettings.laserY));
+    laserDotPos = { x: px, y: py };
+    laserDot.style.left = px + 'px';
+    laserDot.style.top = py + 'px';
+  }
+}
 
 // ─── STATE ───
 let canvas = null;
@@ -185,6 +238,9 @@ export function initAnnotations(notebookEl) {
   // Load saved annotations
   loadAnnotations();
 
+  // Load global settings
+  loadSettings();
+
   // Start render loop
   requestAnimationFrame(renderLoop);
 }
@@ -270,6 +326,11 @@ function resizeCanvas() {
   ctx.scale(dpr, dpr);
   
   redrawAll();
+  
+  // Keep laser proportionally on screen during resize
+  if (laserDot && laserDotPos) {
+    applySettings();
+  }
 }
 
 // ─── COORDINATES ───
@@ -481,6 +542,11 @@ function onLaserMove(e) {
   laserDotPos = { x: newX, y: newY };
   laserDot.style.left = newX + 'px';
   laserDot.style.top = newY + 'px';
+  
+  // Save position relative to screen
+  globalSettings.laserX = newX / window.innerWidth;
+  globalSettings.laserY = newY / window.innerHeight;
+  saveSettings();
   
   // Add beam segment
   if (lastLaserPt && (Math.abs(lastLaserPt.x - px) > 1 || Math.abs(lastLaserPt.y - py) > 1)) {
@@ -987,10 +1053,15 @@ function buildToolbar() {
   slider.type = 'range';
   slider.min = '1';
   slider.max = '15';
-  slider.value = '3';
+  slider.value = globalSettings.penSize;
   slider.className = 'ann-size-slider';
   slider.title = 'Brush Size';
-  slider.addEventListener('input', (e) => { penSize = +e.target.value; updateCursor(); });
+  slider.addEventListener('input', (e) => { 
+    penSize = +e.target.value; 
+    globalSettings.penSize = penSize;
+    saveSettings();
+    updateCursor(); 
+  });
   slider.addEventListener('click', (e) => e.stopPropagation());
   toolbar.appendChild(slider);
 
@@ -1013,12 +1084,15 @@ function buildToolbar() {
   textSlider.min = '0.7';
   textSlider.max = '1.8';
   textSlider.step = '0.05';
-  textSlider.value = '1';
+  textSlider.value = globalSettings.textScale;
   textSlider.className = 'ann-size-slider';
   textSlider.title = 'Adjust Text Size';
   
   textSlider.addEventListener('input', (e) => {
-    document.documentElement.style.setProperty('--text-scale', e.target.value);
+    const val = +e.target.value;
+    document.documentElement.style.setProperty('--text-scale', val);
+    globalSettings.textScale = val;
+    saveSettings();
     // Let the browser reflow CSS, then fix canvas sizes so drawings stay aligned
     setTimeout(resizeCanvas, 50);
   });

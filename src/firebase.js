@@ -79,3 +79,31 @@ export async function loadProgressFromCloud() {
 }
 
 export { db };
+
+// ─── SAVE SETTINGS TO FIRESTORE ───
+export async function saveSettingsToCloud(settings) {
+  try {
+    const docRef = doc(db, 'ekboard', '_settings');
+    await setDoc(docRef, {
+      data: JSON.stringify(settings),
+      updatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.warn('[EK-Board] Settings cloud save failed:', err.message);
+  }
+}
+
+// ─── LOAD SETTINGS FROM FIRESTORE ───
+export async function loadSettingsFromCloud() {
+  try {
+    const docRef = doc(db, 'ekboard', '_settings');
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return JSON.parse(snap.data().data || '{}');
+    }
+    return null;
+  } catch (err) {
+    console.warn('[EK-Board] Settings cloud load failed:', err.message);
+    return null;
+  }
+}
