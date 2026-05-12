@@ -16,8 +16,42 @@ const chapters = [
     id: 'ch1',
     title: 'Chapter 1: Linear Algebra & Inner Products',
     file: './data/ch1/Ch1_Exercises_SOLVED.md'
-  }
-  // { id: 'ch2', title: 'Chapter 2: ...', file: '/data/ch2/Ch2_Exercises_SOLVED.md' },
+  },
+  {
+    id: 'ch2',
+    title: 'Chapter 2: Multivariate Calculus',
+    file: './data/ch2/Ch2_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch3',
+    title: 'Chapter 3: Gradient Descent & SGD',
+    file: './data/ch3/Ch3_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch4',
+    title: 'Chapter 4: Convexity & Convergence',
+    file: './data/ch4/Ch4_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch5',
+    title: 'Chapter 5: Statistical Learning',
+    file: './data/ch5/Ch5_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch6',
+    title: 'Chapter 6: Kernels & Gaussian Processes',
+    file: './data/ch6/Ch6_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch7',
+    title: 'Chapter 7: DNNs, Diffusion & LLMs',
+    file: './data/ch7/Ch7_Exercises_SOLVED.md'
+  },
+  {
+    id: 'ch8',
+    title: 'Chapter 8: Reinforcement Learning',
+    file: './data/ch8/Ch8_Exercises_SOLVED.md'
+  },
 ];
 
 // ─── STATE ───
