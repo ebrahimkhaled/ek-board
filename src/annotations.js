@@ -26,6 +26,7 @@ import { saveToCloud, loadFromCloud, saveSettingsToCloud, loadSettingsFromCloud 
 // ─── GLOBAL SETTINGS SYNC ───
 export let globalSettings = {
   penSize: 3,
+  hlSize: 8,
   textScale: 1,
   laserX: 0.8,
   laserY: 0.5
@@ -57,10 +58,13 @@ async function loadSettings() {
   applySettings();
 }
 
+let currentExerciseHash = '';
+
 function applySettings() {
   penSize = globalSettings.penSize;
+  hlSize = globalSettings.hlSize || 8;
   const brushSlider = document.querySelector('.ann-size-slider[title="Brush Size"]');
-  if (brushSlider) brushSlider.value = penSize;
+  if (brushSlider) brushSlider.value = tool === 'hl' ? hlSize : penSize;
   
   document.documentElement.style.setProperty('--text-scale', globalSettings.textScale);
   const textSlider = document.querySelector('.ann-size-slider[title="Adjust Text Size"]');
@@ -85,6 +89,7 @@ let notebook = null;
 let tool = 'none';    // 'none' | 'pen' | 'hl' | 'eraser' | 'laser'
 let penColor = '#c41e3a';
 let penSize = 3;
+let hlSize = 8;
 let drawing = false;
 let visible = true;
 
@@ -235,6 +240,8 @@ export function initAnnotations(notebookEl) {
   // Create laser pointer dot (always visible)
   createLaserDot();
 
+  currentExerciseHash = window.location.hash || '#default';
+
   // Load saved annotations
   loadAnnotations();
 
@@ -347,9 +354,9 @@ function getPos(e) {
   const scaleY = cssHeight / rect.height;
   
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY,
-    p: e.pressure || 0.5  // Pressure from Apple Pencil (0-1)
+    x: Math.round((e.clientX - rect.left) * scaleX * 10) / 10,
+    y: Math.round((e.clientY - rect.top) * scaleY * 10) / 10,
+    p: Math.round((e.pressure || 0.5) * 100) / 100
   };
 }
 
@@ -736,6 +743,12 @@ export function setAnnotationTool(t) {
   if (t === 'pen' || t === 'hl' || t === 'eraser') {
     lastDrawTool = t;
   }
+  // Update brush size slider based on tool
+  const brushSlider = document.querySelector('.ann-size-slider[title="Brush Size"]');
+  if (brushSlider) {
+    if (t === 'hl') brushSlider.value = globalSettings.hlSize || 8;
+    else if (t === 'pen' || t === 'eraser') brushSlider.value = globalSettings.penSize || 3;
+  }
   // Update toolbar active states
   document.querySelectorAll('.ann-tool-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === t);
@@ -777,7 +790,7 @@ function updateCursor() {
     });
   } else {
     // Pen / Highlighter
-    const size = Math.max((tool === 'hl' ? penSize * 6 : penSize * 2), 8);
+    const size = Math.max((tool === 'hl' ? hlSize * 6 : penSize * 2), 8);
     Object.assign(cursorEl.style, {
       width: size + 'px', height: size + 'px',
       borderRadius: '50%',
@@ -853,12 +866,12 @@ let saveTimer = null;
 let hasPendingCloudSave = false;
 
 function getStorageKey() {
-  const hash = window.location.hash || '#default';
+  const hash = currentExerciseHash || window.location.hash || '#default';
   return hash.replace('#', '').replace(/\//g, '-') || 'default';
 }
 
 function getLocalKey() {
-  return `ekboard-ann-${window.location.hash || 'default'}`;
+  return `ekboard-ann-${currentExerciseHash || window.location.hash || 'default'}`;
 }
 
 function saveAnnotations() {
@@ -939,6 +952,7 @@ function showSyncStatus(status) {
 // ─── EXERCISE CHANGE ───
 export async function onExerciseChange() {
   await flushToCloud();
+  currentExerciseHash = window.location.hash || '#default';
   strokes = [];
   redoStack = [];
 
@@ -1061,8 +1075,13 @@ function buildToolbar() {
   slider.className = 'ann-size-slider';
   slider.title = 'Brush Size';
   slider.addEventListener('input', (e) => { 
-    penSize = +e.target.value; 
-    globalSettings.penSize = penSize;
+    if (tool === 'hl') {
+      hlSize = +e.target.value;
+      globalSettings.hlSize = hlSize;
+    } else {
+      penSize = +e.target.value; 
+      globalSettings.penSize = penSize;
+    }
     saveSettings();
     updateCursor(); 
   });
