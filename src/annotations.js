@@ -362,11 +362,11 @@ function resizeCanvas() {
 
 // ─── COORDINATES ───
 // Maps visual (screen) coordinates → canvas CSS coordinates.
-// Reads CSS zoom directly from notebook — deterministic, no heuristics.
+// Accounts for both CSS zoom AND iPad browser pinch-to-zoom (visualViewport.scale).
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   
-  // rect.width is the screen width (affected by zoom).
+  // rect.width is the screen width (affected by CSS zoom).
   // We map it to the CSS pixel width (notebook.scrollWidth)
   const cssWidth = notebook.scrollWidth;
   const cssHeight = notebook.scrollHeight;
@@ -379,6 +379,10 @@ function getPos(e) {
     p: Math.round((e.pressure || 0.5) * 100) / 100
   };
 }
+
+// Minimum distance² between points (pixels) — skip points closer than this
+// Prevents runaway point accumulation on slow/long strokes
+const MIN_POINT_DIST_SQ = 4; // 2px minimum gap
 
 // ─── INPUT DISCRIMINATION ───
 // Determines if this pointer should draw based on type and tool state
@@ -458,6 +462,13 @@ function onPointerMove(e) {
   const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   for (const ce of events) {
     const pt = getPos(ce);
+    // Minimum distance filter: skip points too close to the last one
+    // This caps point count at ~1 per 2px of movement, preventing runaway growth on long strokes
+    const lastPt = curStroke.pts[curStroke.pts.length - 1];
+    const dx = pt.x - lastPt.x;
+    const dy = pt.y - lastPt.y;
+    if (dx * dx + dy * dy < MIN_POINT_DIST_SQ) continue;
+    
     curStroke.pts.push(pt);
     // Incrementally expand bounding box (O(1) per point instead of O(n) per frame)
     if (activeBBox) {

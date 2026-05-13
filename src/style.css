@@ -159,6 +159,17 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ═══ INLINE CODE (backtick `code`) ═══ */
+.line code {
+  font-family: 'Courier New', 'Consolas', monospace;
+  background: rgba(0, 0, 0, 0.065);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.88em;
+  color: #c41e3a;
+  word-break: break-word;
+}
+
 /* ═══ PEN COLORS ═══ */
 .black   { color: var(--pen-black); }
 .red     { color: var(--pen-red); }
