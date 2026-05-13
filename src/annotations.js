@@ -104,6 +104,83 @@ function computeBBox(pts) {
   return { minX, minY, maxX, maxY };
 }
 
+// ─── COMPUTE WORKER ───
+// Offloads getStroke() computation from main thread
+let strokeWorker = null;
+let workerReady = false;
+let pendingWorkerCallbacks = {};
+let workerMsgId = 0;
+
+function initWorker() {
+  try {
+    strokeWorker = new Worker(
+      new URL('./stroke-worker.js', import.meta.url),
+      { type: 'module' }
+    );
+    strokeWorker.onmessage = onWorkerMessage;
+    strokeWorker.onerror = () => { workerReady = false; };
+    workerReady = true;
+  } catch (err) {
+    console.warn('[EK-Board] Worker init failed, using main thread fallback:', err.message);
+    workerReady = false;
+  }
+}
+
+function onWorkerMessage(e) {
+  const { type, id, results, outline } = e.data;
+
+  if (type === 'outline' && pendingWorkerCallbacks[id]) {
+    pendingWorkerCallbacks[id](outline);
+    delete pendingWorkerCallbacks[id];
+  }
+
+  if (type === 'batchOutlines') {
+    // Apply pre-computed outlines to strokes
+    if (results) {
+      for (const r of results) {
+        if (r.outline && strokes[r.index]) {
+          strokes[r.index]._outline = r.outline;
+        }
+      }
+      // Now that outlines are cached, rebuild cache using them (fast!)
+      cacheValid = false;
+      scheduleRedraw();
+    }
+    if (pendingWorkerCallbacks[id]) {
+      pendingWorkerCallbacks[id]();
+      delete pendingWorkerCallbacks[id];
+    }
+  }
+}
+
+// Request background pre-computation of all stroke outlines
+function precomputeOutlines() {
+  if (!workerReady || !strokeWorker || strokes.length === 0) return;
+  const id = workerMsgId++;
+  // Send only the data the worker needs (pts, tool, size)
+  const lightweight = strokes.map(s => ({
+    pts: s.pts,
+    tool: s.tool,
+    size: s.size
+  }));
+  strokeWorker.postMessage({ type: 'computeBatch', id, data: { strokes: lightweight } });
+}
+
+// Compute outline for a single stroke (main thread, used at pen-up)
+function computeOutline(stroke) {
+  if (stroke.tool === 'hl' || stroke.pts.length < 2) return null;
+  const inputPoints = stroke.pts.map(p => [p.x, p.y, p.p || 0.5]);
+  return getStroke(inputPoints, {
+    size: stroke.size * 2.5,
+    thinning: 0.5,
+    smoothing: 0.5,
+    streamline: 0.5,
+    easing: (t) => t,
+    start: { taper: 0, easing: (t) => t, cap: true },
+    end: { taper: 0, easing: (t) => t, cap: true },
+  });
+}
+
 // ─── STATE ───
 let canvas = null;
 let ctx = null;
@@ -271,6 +348,9 @@ export function initAnnotations(notebookEl) {
 
   // Load global settings
   loadSettings();
+
+  // Init compute worker
+  initWorker();
 
   // Start render loop
   requestAnimationFrame(renderLoop);
@@ -504,6 +584,10 @@ function onPointerUp(e) {
     }
     // Pre-compute bounding box for fast eraser rejection
     curStroke._bbox = computeBBox(curStroke.pts);
+    // Pre-compute outline for instant cache rebuilds (no getStroke() needed later)
+    if (curStroke.tool !== 'hl') {
+      curStroke._outline = computeOutline(curStroke);
+    }
     strokes.push(curStroke);
     // Render completed stroke to offscreen cache for performance
     bakeStrokeToCache(curStroke);
@@ -777,20 +861,16 @@ function drawStroke(s, cx) {
       bx * dpr, by * dpr, bw * dpr, bh * dpr, 
       bx, by, bw, bh);
   } else {
-    // Pen: use perfect-freehand for smooth, pressure-sensitive strokes
-    const inputPoints = s.pts.map(p => [p.x, p.y, p.p || 0.5]);
-    
-    const outlinePoints = getStroke(inputPoints, {
-      size: s.size * 2.5,
-      thinning: 0.5,
-      smoothing: 0.5,
-      streamline: 0.5,
-      easing: (t) => t,
-      start: { taper: 0, easing: (t) => t, cap: true },
-      end: { taper: 0, easing: (t) => t, cap: true },
-    });
+    // Pen: use pre-computed outline if available (instant), otherwise compute (slow fallback)
+    let outlinePoints = s._outline;
+    if (!outlinePoints) {
+      // Fallback: compute inline (first render before worker finishes)
+      outlinePoints = computeOutline(s);
+      // Cache it so we never recompute for this stroke again
+      if (outlinePoints) s._outline = outlinePoints;
+    }
 
-    if (outlinePoints.length < 2) {
+    if (!outlinePoints || outlinePoints.length < 2) {
       cx.restore();
       return;
     }
@@ -956,14 +1036,14 @@ function saveAnnotations() {
   if (now - lastLocalSaveTime > LOCAL_SAVE_THROTTLE) {
     lastLocalSaveTime = now;
     try {
-      const data = JSON.stringify(stripBBoxForSave(strokes));
+      const data = JSON.stringify(stripMetadataForSave(strokes));
       localStorage.setItem(getLocalKey(), data);
     } catch {}
   } else {
     // Schedule a deferred localStorage save so we don't lose the last stroke
     setTimeout(() => {
       try {
-        const data = JSON.stringify(stripBBoxForSave(strokes));
+        const data = JSON.stringify(stripMetadataForSave(strokes));
         localStorage.setItem(getLocalKey(), data);
       } catch {}
     }, LOCAL_SAVE_THROTTLE);
@@ -978,11 +1058,11 @@ function saveAnnotations() {
   }
 }
 
-// Strip internal _bbox metadata before serializing to save space
-function stripBBoxForSave(data) {
+// Strip internal metadata (_bbox, _outline) before serializing to save space
+function stripMetadataForSave(data) {
   return data.map(s => {
-    if (!s._bbox) return s;
-    const { _bbox, ...rest } = s;
+    if (!s._bbox && !s._outline) return s;
+    const { _bbox, _outline, ...rest } = s;
     return rest;
   });
 }
@@ -992,7 +1072,7 @@ async function doCloudSave() {
   if (!hasPendingCloudSave) return;
   hasPendingCloudSave = false;
   const key = getStorageKey();
-  const saveData = stripBBoxForSave(strokes);
+  const saveData = stripMetadataForSave(strokes);
   
   // Guard: Firestore doc limit is ~1MB. If data is too large, decimate further.
   let dataStr = JSON.stringify(saveData);
@@ -1019,7 +1099,7 @@ export async function flushToCloud() {
     saveTimer = null;
     const key = getStorageKey();
     // Fire-and-forget: don't block exercise switch on network
-    saveToCloud(key, stripBBoxForSave(strokes))
+    saveToCloud(key, stripMetadataForSave(strokes))
       .then(ok => showSyncStatus(ok ? 'saved' : 'error'))
       .catch(() => showSyncStatus('error'));
   }
@@ -1037,6 +1117,8 @@ async function loadAnnotations() {
       strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
       cacheValid = false;
       scheduleRedraw();
+      // Background: pre-compute outlines in worker (cache rebuilds become instant)
+      precomputeOutlines();
     }
   } catch {}
 
@@ -1046,10 +1128,12 @@ async function loadAnnotations() {
     if (cloudData && cloudData.length > 0) {
       strokes = cloudData;
       strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
-      try { localStorage.setItem(localKey, JSON.stringify(stripBBoxForSave(strokes))); } catch {}
+      try { localStorage.setItem(localKey, JSON.stringify(stripMetadataForSave(strokes))); } catch {}
       showSyncStatus('loaded');
       cacheValid = false;
       scheduleRedraw();
+      // Background: pre-compute outlines in worker
+      precomputeOutlines();
     } else if (strokes.length > 0) {
       showSyncStatus('local');
     }
