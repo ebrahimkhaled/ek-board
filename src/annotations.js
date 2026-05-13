@@ -188,7 +188,7 @@ let ctx = null;
 let laserSvg = null;
 let notebook = null;
 
-let tool = 'none';    // 'none' | 'pen' | 'hl' | 'eraser' | 'laser'
+let tool = 'none';    // 'none' | 'pen' | 'hl' | 'eraser' | 'laser' | 'lasso'
 let penColor = '#c41e3a';
 let penSize = 3;
 let hlSize = 8;
@@ -234,7 +234,7 @@ export function shouldNavigate(pointerType) {
   if (penActive) return false;                // Pen is touching — block everything
   if (pointerType === 'touch') return true;   // Finger ALWAYS navigates
   // Mouse: navigates only if no drawing tool is active
-  return !(tool === 'pen' || tool === 'hl' || tool === 'eraser');
+  return !(tool === 'pen' || tool === 'hl' || tool === 'eraser' || tool === 'lasso');
 }
 
 // Check if pen is currently touching (for main.js safety check)
@@ -433,6 +433,8 @@ function renderLoop() {
       lastDrawBox = null;
       redrawAll();
     }
+    // Lasso overlay (drawn on top of everything)
+    if (tool === 'lasso') drawLassoOverlay(ctx);
   }
   requestAnimationFrame(renderLoop);
 }
@@ -496,10 +498,9 @@ const MIN_POINT_DIST_SQ = 4; // 2px minimum gap
 // Determines if this pointer should draw based on type and tool state
 function shouldDraw(pointerType) {
   if (tool === 'none' || tool === 'laser') return false;
-  if (pointerType === 'touch') return false;   // Finger NEVER draws
-  if (pointerType === 'pen') return true;       // Pen ALWAYS draws (when tool active)
-  // Mouse: draws if drawing tool selected
-  return tool === 'pen' || tool === 'hl' || tool === 'eraser';
+  if (pointerType === 'touch') return false;
+  if (pointerType === 'pen') return true;
+  return tool === 'pen' || tool === 'hl' || tool === 'eraser' || tool === 'lasso';
 }
 
 // ─── POINTER EVENTS ───
@@ -534,6 +535,12 @@ function onPointerDown(e) {
     return;
   }
 
+  // LASSO: selection tool
+  if (tool === 'lasso') {
+    onLassoDown(p);
+    return;
+  }
+
   // PEN / HIGHLIGHTER: start new stroke
   // Reset incremental bounding box
   activeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y };
@@ -561,6 +568,12 @@ function onPointerMove(e) {
   if (tool === 'eraser') {
     const p = getPos(e);
     eraseStrokeAt(p);
+    return;
+  }
+
+  // LASSO: drag/draw
+  if (tool === 'lasso') {
+    onLassoMove(getPos(e));
     return;
   }
 
@@ -605,19 +618,22 @@ function onPointerUp(e) {
   if (!drawing) return;
   drawing = false;
   
+  // LASSO: finish selection
+  if (tool === 'lasso') {
+    onLassoUp(getPos(e));
+    drawing = false;
+    return;
+  }
+
   if (curStroke && curStroke.pts.length >= 2) {
-    // Decimate long strokes to save memory and speed up future redraws
     if (curStroke.pts.length > 500) {
       curStroke.pts = decimatePoints(curStroke.pts, 2);
     }
-    // Pre-compute bounding box for fast eraser rejection
     curStroke._bbox = computeBBox(curStroke.pts);
-    // Pre-compute outline for instant cache rebuilds (no getStroke() needed later)
     if (curStroke.tool !== 'hl') {
       curStroke._outline = computeOutline(curStroke);
     }
     strokes.push(curStroke);
-    // Render completed stroke to offscreen cache for performance
     bakeStrokeToCache(curStroke);
   }
   curStroke = null;
@@ -1001,6 +1017,10 @@ export function setAnnotationTool(t) {
   if (t === 'pen' || t === 'hl' || t === 'eraser') {
     lastDrawTool = t;
   }
+  // Clear lasso selection when switching away from lasso
+  if (tool === 'lasso' && t !== 'lasso') {
+    clearLassoSelection();
+  }
   // Update brush size slider based on tool
   const brushSlider = document.querySelector('.ann-size-slider[title="Brush Size"]');
   if (brushSlider) {
@@ -1044,6 +1064,15 @@ function updateCursor() {
       borderRadius: '50%',
       background: 'rgba(255,107,107,0.15)',
       border: '2px solid rgba(255,107,107,0.6)',
+      boxShadow: 'none',
+    });
+  } else if (tool === 'lasso') {
+    const size = 20;
+    Object.assign(cursorEl.style, {
+      width: size + 'px', height: size + 'px',
+      borderRadius: '50%',
+      background: 'rgba(59,130,246,0.1)',
+      border: '2px dashed #3b82f6',
       boxShadow: 'none',
     });
   } else {
@@ -1299,6 +1328,7 @@ function buildToolbar() {
     { id: 'pen', icon: '✏️', title: 'Pen' },
     { id: 'hl', icon: '🖍️', title: 'Highlighter' },
     { id: 'eraser', icon: '🧹', title: 'Eraser (or double-tap pen)' },
+    { id: 'lasso', icon: '✂️', title: 'Lasso Select' },
     { id: 'eye', icon: '👁️', title: 'Toggle Annotations' },
   ];
 
@@ -1441,6 +1471,340 @@ function makeDivider() {
   const d = document.createElement('div');
   d.className = 'ann-divider';
   return d;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── LASSO SELECTION TOOL ───
+// Intersection-based: lasso path only needs to TOUCH a stroke to select it.
+// Selected strokes get a blue-gray overlay + resize handles.
+// ═══════════════════════════════════════════════════════════════════════════
+let lassoSelectedStrokes = new Set();
+let lassoPath = [];
+let isDrawingLasso = false;
+let lassoActionBar = null;
+let lassoDrag = null; // { type:'move'|'resize', startX, startY, corner?, origBox? }
+
+function onLassoDown(pt) {
+  // If clicking on resize handle
+  const handle = getLassoResizeHandle(pt);
+  if (handle) {
+    lassoDrag = { type: 'resize', corner: handle, startX: pt.x, startY: pt.y, origBox: getLassoSelectionBBox() };
+    return;
+  }
+  // If clicking inside existing selection → move
+  if (lassoSelectedStrokes.size > 0 && isInsideLassoSelection(pt)) {
+    lassoDrag = { type: 'move', startX: pt.x, startY: pt.y };
+    return;
+  }
+  // Clear previous selection, start new lasso
+  clearLassoSelection();
+  lassoPath = [pt];
+  isDrawingLasso = true;
+}
+
+function onLassoMove(pt) {
+  if (lassoDrag) {
+    if (lassoDrag.type === 'move') {
+      const dx = pt.x - lassoDrag.startX, dy = pt.y - lassoDrag.startY;
+      for (const s of lassoSelectedStrokes) {
+        for (const p of s.pts) { p.x += dx; p.y += dy; }
+        if (s._bbox) { s._bbox.minX += dx; s._bbox.minY += dy; s._bbox.maxX += dx; s._bbox.maxY += dy; }
+        s._outline = null;
+      }
+      lassoDrag.startX = pt.x;
+      lassoDrag.startY = pt.y;
+      cacheValid = false;
+      scheduleRedraw();
+    } else if (lassoDrag.type === 'resize') {
+      const ob = lassoDrag.origBox;
+      const cx = (ob.minX + ob.maxX) / 2, cy = (ob.minY + ob.maxY) / 2;
+      const hw = Math.max((ob.maxX - ob.minX) / 2, 1), hh = Math.max((ob.maxY - ob.minY) / 2, 1);
+      let sx = 1, sy = 1;
+      if (lassoDrag.corner.includes('r')) sx = Math.max(0.1, 1 + (pt.x - lassoDrag.startX) / hw);
+      if (lassoDrag.corner.includes('l')) sx = Math.max(0.1, 1 - (pt.x - lassoDrag.startX) / hw);
+      if (lassoDrag.corner.includes('b')) sy = Math.max(0.1, 1 + (pt.y - lassoDrag.startY) / hh);
+      if (lassoDrag.corner.includes('t')) sy = Math.max(0.1, 1 - (pt.y - lassoDrag.startY) / hh);
+      for (const s of lassoSelectedStrokes) {
+        for (const p of s.pts) { p.x = cx + (p.x - cx) * sx; p.y = cy + (p.y - cy) * sy; }
+        s._bbox = computeBBox(s.pts);
+        s._outline = null;
+      }
+      lassoDrag.startX = pt.x; lassoDrag.startY = pt.y;
+      lassoDrag.origBox = getLassoSelectionBBox();
+      cacheValid = false;
+      scheduleRedraw();
+    }
+    return;
+  }
+  if (!isDrawingLasso) return;
+  lassoPath.push(pt);
+  scheduleRedraw();
+}
+
+function onLassoUp(pt) {
+  if (lassoDrag) {
+    lassoDrag = null;
+    saveAnnotations();
+    cacheValid = false;
+    scheduleRedraw();
+    updateLassoActionBar();
+    return;
+  }
+  if (!isDrawingLasso) return;
+  isDrawingLasso = false;
+  if (lassoPath.length < 3) { lassoPath = []; return; }
+  // Find strokes intersecting the lasso path
+  const RADIUS_SQ = 225; // 15px touch radius
+  for (const stroke of strokes) {
+    if (strokeIntersectsLassoPath(stroke, lassoPath, RADIUS_SQ)) {
+      lassoSelectedStrokes.add(stroke);
+    }
+  }
+  lassoPath = [];
+  if (lassoSelectedStrokes.size > 0) {
+    updateLassoActionBar();
+  }
+  scheduleRedraw();
+}
+
+function strokeIntersectsLassoPath(stroke, path, radiusSq) {
+  const step = stroke.pts.length > 100 ? 3 : 1;
+  for (let i = 0; i < stroke.pts.length; i += step) {
+    const sp = stroke.pts[i];
+    for (let j = 0; j < path.length - 1; j++) {
+      if (ptToSegDistSq(sp, path[j], path[j+1]) < radiusSq) return true;
+    }
+  }
+  return false;
+}
+
+function ptToSegDistSq(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
+  let t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+  return (p.x - (a.x + t * dx)) ** 2 + (p.y - (a.y + t * dy)) ** 2;
+}
+
+function getLassoSelectionBBox() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of lassoSelectedStrokes) {
+    if (s._bbox) {
+      if (s._bbox.minX < minX) minX = s._bbox.minX;
+      if (s._bbox.minY < minY) minY = s._bbox.minY;
+      if (s._bbox.maxX > maxX) maxX = s._bbox.maxX;
+      if (s._bbox.maxY > maxY) maxY = s._bbox.maxY;
+    }
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function isInsideLassoSelection(pt) {
+  if (lassoSelectedStrokes.size === 0) return false;
+  const b = getLassoSelectionBBox();
+  return pt.x >= b.minX - 10 && pt.x <= b.maxX + 10 && pt.y >= b.minY - 10 && pt.y <= b.maxY + 10;
+}
+
+const LASSO_HANDLE = 12;
+function getLassoResizeHandle(pt) {
+  if (lassoSelectedStrokes.size === 0) return null;
+  const b = getLassoSelectionBBox();
+  const pad = 8;
+  const corners = [
+    { name: 'tl', x: b.minX - pad, y: b.minY - pad },
+    { name: 'tr', x: b.maxX + pad, y: b.minY - pad },
+    { name: 'bl', x: b.minX - pad, y: b.maxY + pad },
+    { name: 'br', x: b.maxX + pad, y: b.maxY + pad },
+  ];
+  for (const c of corners) {
+    if (Math.abs(pt.x - c.x) < LASSO_HANDLE && Math.abs(pt.y - c.y) < LASSO_HANDLE) return c.name;
+  }
+  return null;
+}
+
+// ── LASSO OVERLAY RENDERING ──
+function drawLassoOverlay(cx) {
+  // Lasso path preview
+  if (isDrawingLasso && lassoPath.length > 1) {
+    cx.save();
+    cx.strokeStyle = '#3b82f6';
+    cx.lineWidth = 2;
+    cx.setLineDash([6, 4]);
+    cx.globalAlpha = 0.8;
+    cx.beginPath();
+    cx.moveTo(lassoPath[0].x, lassoPath[0].y);
+    for (let i = 1; i < lassoPath.length; i++) cx.lineTo(lassoPath[i].x, lassoPath[i].y);
+    cx.stroke();
+    cx.restore();
+  }
+  // Selection overlay
+  if (lassoSelectedStrokes.size > 0) {
+    const b = getLassoSelectionBBox();
+    const pad = 8;
+    cx.save();
+    // Blue-gray frosted overlay
+    cx.fillStyle = 'rgba(100, 140, 180, 0.12)';
+    cx.fillRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    // Dashed border
+    cx.strokeStyle = '#3b82f6';
+    cx.lineWidth = 1.5;
+    cx.setLineDash([6, 4]);
+    cx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    cx.setLineDash([]);
+    // Corner handles
+    const corners = [
+      { x: b.minX - pad, y: b.minY - pad }, { x: b.maxX + pad, y: b.minY - pad },
+      { x: b.minX - pad, y: b.maxY + pad }, { x: b.maxX + pad, y: b.maxY + pad },
+    ];
+    corners.forEach(c => {
+      cx.fillStyle = '#ffffff';
+      cx.strokeStyle = '#3b82f6';
+      cx.lineWidth = 2;
+      cx.beginPath();
+      cx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+      cx.fill();
+      cx.stroke();
+    });
+    cx.restore();
+  }
+}
+
+// ── LASSO ACTIONS ──
+function lassoCopy() {
+  const newStrokes = [];
+  for (const s of lassoSelectedStrokes) {
+    const clone = JSON.parse(JSON.stringify({ tool: s.tool, color: s.color, size: s.size, pts: s.pts }));
+    clone.pts.forEach(p => { p.x += 20; p.y += 20; });
+    clone._bbox = computeBBox(clone.pts);
+    newStrokes.push(clone);
+  }
+  newStrokes.forEach(s => strokes.push(s));
+  lassoSelectedStrokes = new Set(newStrokes);
+  cacheValid = false;
+  scheduleRedraw();
+  saveAnnotations();
+  updateLassoActionBar();
+}
+
+function lassoRecolor(color) {
+  for (const s of lassoSelectedStrokes) { s.color = color; s._outline = null; }
+  cacheValid = false;
+  scheduleRedraw();
+  saveAnnotations();
+}
+
+function lassoDelete() {
+  for (const s of lassoSelectedStrokes) {
+    const idx = strokes.indexOf(s);
+    if (idx !== -1) strokes.splice(idx, 1);
+  }
+  clearLassoSelection();
+  cacheValid = false;
+  scheduleRedraw();
+  saveAnnotations();
+}
+
+function clearLassoSelection() {
+  lassoSelectedStrokes.clear();
+  lassoPath = [];
+  isDrawingLasso = false;
+  lassoDrag = null;
+  removeLassoActionBar();
+  scheduleRedraw();
+}
+
+// ── LASSO ACTION BAR UI ──
+function updateLassoActionBar() {
+  removeLassoActionBar();
+  if (lassoSelectedStrokes.size === 0) return;
+  
+  const b = getLassoSelectionBBox();
+  lassoActionBar = document.createElement('div');
+  lassoActionBar.id = 'lassoActionBar';
+  Object.assign(lassoActionBar.style, {
+    position: 'fixed',
+    display: 'flex',
+    gap: '4px',
+    padding: '6px 8px',
+    borderRadius: '10px',
+    background: 'rgba(30, 41, 59, 0.95)',
+    backdropFilter: 'blur(8px)',
+    border: '1px solid rgba(59, 130, 246, 0.3)',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    zIndex: '200',
+    pointerEvents: 'auto',
+  });
+  
+  // Position above selection
+  if (canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.width / dpr, ch = canvas.height / dpr;
+    const sx = rect.left + (b.minX / cw) * rect.width;
+    const sy = rect.top + (b.minY / ch) * rect.height - 52;
+    lassoActionBar.style.left = Math.max(10, sx) + 'px';
+    lassoActionBar.style.top = Math.max(10, sy) + 'px';
+  }
+  
+  const actions = [
+    { icon: '📋', title: 'Copy', fn: lassoCopy },
+    { icon: '🎨', title: 'Recolor', fn: () => showLassoColorPicker() },
+    { icon: '🗑️', title: 'Delete', fn: lassoDelete },
+  ];
+  
+  actions.forEach(a => {
+    const btn = document.createElement('button');
+    Object.assign(btn.style, {
+      background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px',
+      color: '#e2e8f0', padding: '4px 8px', cursor: 'pointer', fontSize: '1.1rem',
+    });
+    btn.textContent = a.icon;
+    btn.title = a.title;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); a.fn(); });
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    lassoActionBar.appendChild(btn);
+  });
+  
+  document.body.appendChild(lassoActionBar);
+}
+
+function showLassoColorPicker() {
+  const colors = ['#c41e3a', '#1a5276', '#1a1a1a', '#1e8449', '#f59e0b'];
+  const picker = document.createElement('div');
+  picker.id = 'lassoColorPicker';
+  Object.assign(picker.style, {
+    position: 'fixed', display: 'flex', gap: '6px', padding: '6px 8px',
+    borderRadius: '10px', background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(8px)',
+    border: '1px solid rgba(59, 130, 246, 0.3)', zIndex: '201',
+  });
+  if (lassoActionBar) {
+    const r = lassoActionBar.getBoundingClientRect();
+    picker.style.left = r.left + 'px';
+    picker.style.top = (r.bottom + 4) + 'px';
+  }
+  colors.forEach(c => {
+    const dot = document.createElement('div');
+    Object.assign(dot.style, {
+      width: '22px', height: '22px', borderRadius: '50%', background: c,
+      cursor: 'pointer', border: '2px solid rgba(255,255,255,0.2)',
+    });
+    dot.addEventListener('click', (e) => { e.stopPropagation(); lassoRecolor(c); picker.remove(); });
+    dot.addEventListener('pointerdown', (e) => e.stopPropagation());
+    picker.appendChild(dot);
+  });
+  document.body.appendChild(picker);
+  setTimeout(() => {
+    document.addEventListener('pointerdown', function handler() {
+      picker.remove();
+      document.removeEventListener('pointerdown', handler);
+    }, { once: true });
+  }, 100);
+}
+
+function removeLassoActionBar() {
+  if (lassoActionBar) { lassoActionBar.remove(); lassoActionBar = null; }
+  const picker = document.getElementById('lassoColorPicker');
+  if (picker) picker.remove();
 }
 
 // ─── DEBUG INPUT INDICATOR ───
