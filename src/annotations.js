@@ -292,8 +292,8 @@ export function initAnnotations(notebookEl) {
   // ensuring strokes begin immediately with zero latency.
   document.addEventListener('touchstart', (e) => {
     if (e.touches && e.touches[0] && e.touches[0].touchType === 'stylus') {
-      // Allow clicking on UI elements (toolbar, buttons) with the Apple Pencil
-      if (e.target.closest('.ann-toolbar') || e.target.closest('button') || e.target.closest('input')) {
+      // Allow clicking on UI elements (toolbar, buttons, lasso action bar) with the Apple Pencil
+      if (e.target.closest('.ann-toolbar') || e.target.closest('button') || e.target.closest('input') || e.target.closest('#lassoActionBar') || e.target.closest('#lassoColorPicker')) {
         return; 
       }
       e.preventDefault();
@@ -505,9 +505,13 @@ function shouldDraw(pointerType) {
 
 // ─── POINTER EVENTS ───
 function onPointerDown(e) {
-  // ── FINGER: Let it pass through for scrolling ──
-  // We do NOT call preventDefault() → browser handles scroll natively
-  if (e.pointerType === 'touch') return;
+  // ── FINGER: deselect lasso if tapping, otherwise let it scroll ──
+  if (e.pointerType === 'touch') {
+    if (tool === 'lasso' && lassoSelectedStrokes.size > 0) {
+      clearLassoSelection();
+    }
+    return;
+  }
 
   // ── PEN: Auto-activate last drawing tool ──
   if (e.pointerType === 'pen' && (tool === 'none' || tool === 'laser')) {
