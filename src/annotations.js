@@ -600,20 +600,20 @@ function onPointerUp(e) {
 }
 
 // ─── WHOLE-STROKE ERASER ───
-// Performance: use bounding-box pre-check to skip strokes that are far away.
-// Two-tier throttle:
-//   1. Lightweight direct redraw: once per animation frame (16ms)
-//   2. Expensive cache rebuild: debounced 200ms after erasing stops
+// Performance strategy:
+//   1. Hit-test uses bounding-box pre-check to skip distant strokes (O(1) per stroke)
+//   2. On erase: ONLY redraw the small area around the erased stroke (O(k), k = overlapping strokes)
+//   3. Full cache rebuild debounced to 300ms after erasing stops (cleanup)
+// This makes erasing feel instant even with 500+ strokes.
 let eraseRebuildTimer = null;
-let eraseRedrawScheduled = false;
 
 function eraseStrokeAt(pt) {
   const radius = penSize * 5;
   const radiusSq = radius * radius;
-  let erased = false;
+  let erasedStroke = null;
   for (let i = strokes.length - 1; i >= 0; i--) {
     const stroke = strokes[i];
-    // Fast bounding-box rejection — skip strokes that can't possibly intersect
+    // Fast bounding-box rejection
     if (stroke._bbox) {
       const b = stroke._bbox;
       if (pt.x < b.minX - radius || pt.x > b.maxX + radius ||
@@ -621,40 +621,72 @@ function eraseStrokeAt(pt) {
         continue;
       }
     }
-    // Sample every Nth point for large strokes (still accurate within radius)
+    // Point-level hit test (sample every Nth point for large strokes)
     const pts = stroke.pts;
     const step = pts.length > 200 ? 3 : 1;
     for (let j = 0; j < pts.length; j += step) {
       const dx = pts[j].x - pt.x;
       const dy = pts[j].y - pt.y;
       if (dx * dx + dy * dy < radiusSq) {
-        redoStack.push(strokes.splice(i, 1)[0]);
-        erased = true;
+        erasedStroke = strokes.splice(i, 1)[0];
+        redoStack.push(erasedStroke);
         break;
       }
     }
+    if (erasedStroke) break;
   }
-  if (erased) {
-    // Tier 1: Lightweight immediate redraw (once per animation frame)
-    // Draws all remaining strokes directly — fast with cached _outlines
-    if (!eraseRedrawScheduled) {
-      eraseRedrawScheduled = true;
-      requestAnimationFrame(() => {
-        eraseRedrawScheduled = false;
-        if (!ctx || !canvas) return;
-        const dpr = window.devicePixelRatio || 1;
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-        strokes.forEach(s => drawStroke(s, ctx));
-      });
-    }
-    // Tier 2: Expensive cache rebuild, debounced 200ms after erasing stops
+  if (erasedStroke) {
+    // LOCAL-AREA REDRAW: only repaint the bbox of the erased stroke
+    // Instead of clearing + redrawing ALL strokes (slow), we:
+    //   1. Clear just the erased stroke's area on both cache and screen
+    //   2. Clip to that area and redraw only overlapping strokes
+    eraseLocalArea(erasedStroke);
+
+    // Full cache rebuild debounced (cleanup for edge cases like overlapping composites)
     clearTimeout(eraseRebuildTimer);
     eraseRebuildTimer = setTimeout(() => {
       cacheValid = false;
       rebuildCache();
       scheduleRedraw();
-    }, 200);
+    }, 300);
   }
+}
+
+// Redraw ONLY the area occupied by the erased stroke — O(k) not O(n)
+function eraseLocalArea(erasedStroke) {
+  if (!ctx || !canvas || !cacheCanvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const bbox = erasedStroke._bbox || computeBBox(erasedStroke.pts);
+  const pad = (erasedStroke.size || 3) * 5 + 5;
+  const bx = Math.floor(bbox.minX - pad);
+  const by = Math.floor(bbox.minY - pad);
+  const bw = Math.ceil(bbox.maxX - bbox.minX + pad * 2);
+  const bh = Math.ceil(bbox.maxY - bbox.minY + pad * 2);
+
+  // 1. Clear the area on the cache canvas
+  cacheCtx.clearRect(bx, by, bw, bh);
+
+  // 2. Clip to the area and redraw ONLY overlapping strokes
+  cacheCtx.save();
+  cacheCtx.beginPath();
+  cacheCtx.rect(bx, by, bw, bh);
+  cacheCtx.clip();
+  for (const s of strokes) {
+    if (!s._bbox) continue;
+    // Quick overlap check: does this stroke's bbox intersect the cleared area?
+    if (s._bbox.maxX + pad >= bx && s._bbox.minX - pad <= bx + bw &&
+        s._bbox.maxY + pad >= by && s._bbox.minY - pad <= by + bh) {
+      drawStroke(s, cacheCtx);
+    }
+  }
+  cacheCtx.restore();
+
+  // 3. Update the screen canvas from cache (just the affected area)
+  ctx.clearRect(bx, by, bw, bh);
+  ctx.drawImage(cacheCanvas,
+    bx * dpr, by * dpr, bw * dpr, bh * dpr,
+    bx, by, bw, bh);
+  cacheValid = true;
 }
 
 // ─── LASER POINTER (Always-Visible Draggable Dot with Beam Trail) ───
