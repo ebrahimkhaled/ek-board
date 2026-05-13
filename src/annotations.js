@@ -22,6 +22,7 @@
  */
 import { getStroke } from 'perfect-freehand';
 import { saveToCloud, loadFromCloud, saveSettingsToCloud, loadSettingsFromCloud } from './firebase.js';
+import { saveToIDB, loadFromIDB } from './idb-storage.js';
 
 // ─── GLOBAL SETTINGS SYNC ───
 export let globalSettings = {
@@ -1005,50 +1006,42 @@ export function toggleVisibility() {
 export function clearAnnotations() {
   strokes = [];
   redoStack = [];
-  cacheValid = false;  // Invalidate cache
+  cacheValid = false;
   scheduleRedraw();
-  // Save empty state immediately
-  try { localStorage.setItem(getLocalKey(), '[]'); } catch {}
+  // Clear IndexedDB + Cloud
   const key = getStorageKey();
+  saveToIDB(key, []);
   hasPendingCloudSave = false;
   clearTimeout(saveTimer);
   saveToCloud(key, []).then(ok => showSyncStatus(ok ? 'saved' : 'error'));
 }
 
-// ─── PERSISTENCE (localStorage instant + Firestore debounced) ───
+// ─── PERSISTENCE (IndexedDB primary + Firestore debounced cloud backup) ───
 let saveTimer = null;
 let hasPendingCloudSave = false;
 let lastLocalSaveTime = 0;
-const LOCAL_SAVE_THROTTLE = 2000; // Don't serialize to localStorage more than every 2s
+const LOCAL_SAVE_THROTTLE = 2000;
+let idbSaveTimer = null;
 
 function getStorageKey() {
   const hash = currentExerciseHash || window.location.hash || '#default';
   return hash.replace('#', '').replace(/\//g, '-') || 'default';
 }
 
-function getLocalKey() {
-  return `ekboard-ann-${currentExerciseHash || window.location.hash || 'default'}`;
-}
-
 function saveAnnotations() {
-  // 1. Throttled localStorage save (avoid JSON.stringify on every pen-up)
+  // 1. Throttled IndexedDB save (async, no main-thread blocking, no size limit)
   const now = Date.now();
   if (now - lastLocalSaveTime > LOCAL_SAVE_THROTTLE) {
     lastLocalSaveTime = now;
-    try {
-      const data = JSON.stringify(stripMetadataForSave(strokes));
-      localStorage.setItem(getLocalKey(), data);
-    } catch {}
+    saveToIDB(getStorageKey(), stripMetadataForSave(strokes));
   } else {
-    // Schedule a deferred localStorage save so we don't lose the last stroke
-    setTimeout(() => {
-      try {
-        const data = JSON.stringify(stripMetadataForSave(strokes));
-        localStorage.setItem(getLocalKey(), data);
-      } catch {}
+    // Debounce: schedule a save so the last stroke is never lost
+    clearTimeout(idbSaveTimer);
+    idbSaveTimer = setTimeout(() => {
+      saveToIDB(getStorageKey(), stripMetadataForSave(strokes));
     }, LOCAL_SAVE_THROTTLE);
   }
-  // 2. Debounced Firestore save (every 60 seconds)
+  // 2. Debounced Firestore cloud backup (every 60 seconds)
   hasPendingCloudSave = true;
   if (!saveTimer) {
     saveTimer = setTimeout(() => {
@@ -1106,40 +1099,35 @@ export async function flushToCloud() {
 }
 
 async function loadAnnotations() {
-  const localKey = getLocalKey();
+  const key = getStorageKey();
   
-  // 1. Instant load from localStorage
+  // 1. Fast load from IndexedDB (async but local — ~1ms)
   try {
-    const local = localStorage.getItem(localKey);
-    if (local) {
-      strokes = JSON.parse(local);
-      // Rehydrate bounding boxes for eraser performance
+    const idbData = await loadFromIDB(key);
+    if (idbData && idbData.length > 0) {
+      strokes = idbData;
       strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
       cacheValid = false;
       scheduleRedraw();
-      // Background: pre-compute outlines in worker (cache rebuilds become instant)
       precomputeOutlines();
     }
   } catch {}
 
-  // 2. Sync with cloud in background (don't block UI)
-  const key = getStorageKey();
+  // 2. Background cloud sync (may have newer data from another device)
   loadFromCloud(key).then(cloudData => {
     if (cloudData && cloudData.length > 0) {
       strokes = cloudData;
       strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
-      try { localStorage.setItem(localKey, JSON.stringify(stripMetadataForSave(strokes))); } catch {}
+      // Update IndexedDB with cloud data
+      saveToIDB(key, stripMetadataForSave(strokes));
       showSyncStatus('loaded');
       cacheValid = false;
       scheduleRedraw();
-      // Background: pre-compute outlines in worker
       precomputeOutlines();
     } else if (strokes.length > 0) {
       showSyncStatus('local');
     }
-  }).catch(() => {
-    // Cloud failed — localStorage data already loaded, no interruption
-  });
+  }).catch(() => {});
 }
 
 function showSyncStatus(status) {
