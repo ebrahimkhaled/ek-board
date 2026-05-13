@@ -2,7 +2,7 @@
    style.css — Notebook Paper Design + Pen Colors
    ═══════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Caveat:wght@400;600;700&family=Inter:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Caveat:wght@400;600;700&family=Inter:wght@400;600;700&family=Noto+Sans+Arabic:wght@400;600;700&display=swap');
 
 /* Font smoothing for crisp text on retina displays */
 * {
@@ -166,6 +166,26 @@ body {
 .green   { color: var(--pen-green); }
 .pencil  { color: var(--pen-pencil); font-style: italic; font-size: calc(1.05rem * var(--text-scale, 1)); }
 
+/* ═══ RTL / ARABIC SUPPORT ═══ */
+.rtl-line {
+  direction: rtl;
+  text-align: right;
+  font-family: 'Noto Sans Arabic', 'Segoe UI', 'Patrick Hand', sans-serif;
+  font-style: normal;
+  line-height: calc(40px * var(--text-scale, 1));
+  unicode-bidi: bidi-override;
+}
+.rtl-line code {
+  direction: ltr;
+  unicode-bidi: embed;
+  font-family: 'Courier New', monospace;
+  background: rgba(0,0,0,0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-style: normal;
+  color: var(--pen-blue);
+}
+
 /* ═══ LINE TYPES ═══ */
 
 /* Title (Exercise header) */
@@ -259,6 +279,130 @@ body {
 
 /* Spacer */
 .spacer { min-height: 12px; }
+
+/* ═══ IMAGE STEPS ═══ */
+.image-line {
+  min-height: auto !important;
+  padding: 10px 0;
+  justify-content: center;
+}
+.image-step {
+  width: 100%;
+  text-align: center;
+}
+.image-step img {
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 6px;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.14);
+  object-fit: contain;
+}
+.image-caption {
+  font-family: var(--font-hand);
+  font-size: calc(0.88rem * var(--text-scale, 1));
+  color: var(--pen-pencil);
+  font-style: italic;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+/* Image fade-in animation */
+.image-line.visible .image-step {
+  animation: imgFadeIn 0.5s ease forwards;
+}
+@keyframes imgFadeIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* ═══ CODE LINE STEPS ═══ */
+.code-line-step {
+  font-family: 'Courier New', 'Consolas', monospace !important;
+  font-style: normal !important;
+  background: #1e1e2e;
+  color: #cdd6f4 !important;
+  margin-left: -10px;
+  margin-right: -10px;
+  padding: 1px 18px !important;
+  min-height: calc(26px * var(--text-scale, 1)) !important;
+  font-size: calc(0.82rem * var(--text-scale, 1)) !important;
+  border-left: 3px solid #569cd6;
+  line-height: 1.7 !important;
+  align-items: center;
+}
+.code-line-step code {
+  font-family: inherit;
+  white-space: pre;
+  color: inherit;
+}
+/* First code line: rounded top */
+.code-line-step.code-first {
+  border-radius: 8px 8px 0 0;
+  margin-top: 10px;
+  padding-top: 10px !important;
+}
+/* Last code line: rounded bottom */
+.code-line-step.code-last {
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px !important;
+}
+/* Single code line (first + last) */
+.code-line-step.code-first.code-last {
+  border-radius: 8px;
+}
+/* Code write animation: typewriter-style */
+.code-line-step.visible code {
+  animation: codeTypeIn 0.4s linear forwards;
+}
+@keyframes codeTypeIn {
+  0% { clip-path: inset(0 100% 0 0); opacity: 0; }
+  20% { opacity: 1; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+/* Keyword coloring for Python */
+.code-line-step .kw { color: #c678dd; }
+.code-line-step .fn { color: #61afef; }
+.code-line-step .cm { color: #5c6370; font-style: italic; }
+.code-line-step .st { color: #98c379; }
+.code-line-step .num { color: #d19a66; }
+
+/* ═══ SUBJECT SELECTOR TABS ═══ */
+.subject-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.subject-tab {
+  flex: 1;
+  padding: 9px 6px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #94a3b8;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.2s;
+  line-height: 1.3;
+}
+.subject-tab:hover {
+  background: rgba(255,255,255,0.04);
+  color: #cbd5e1;
+}
+.subject-tab.active {
+  background: rgba(13, 148, 136, 0.15);
+  border-color: rgba(13, 148, 136, 0.4);
+  color: #0d9488;
+}
+.subject-tab .subject-icon {
+  display: block;
+  font-size: 1.1rem;
+  margin-bottom: 2px;
+}
 
 /* Checkmark circle */
 .check-circle {

@@ -9,7 +9,8 @@
  * @param {string} chapterTitle - Title for the chapter
  * @returns {{ chapter: string, exercises: Array }}
  */
-export function parseMD(md, chapterTitle = 'Chapter') {
+export function parseMD(md, chapterTitle = 'Chapter', basePath = '') {
+  // basePath: directory of the MD file (e.g., './data/ssd/') for resolving relative image paths
   const lines = md.split('\n');
   const exercises = [];
   let currentExercise = null;
@@ -50,8 +51,58 @@ export function parseMD(md, chapterTitle = 'Chapter') {
       continue;
     }
 
-    // ─── EXERCISE HEADER (## Exercise ...) ───
-    const exHeader = line.match(/^## (Exercise .+|Exercise — .+)/);
+    // ─── IMAGE LINES ───  ![alt text](./images/file.png)
+    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+    if (imgMatch && currentExercise) {
+      // Resolve image path relative to MD file location
+      let imgPath = imgMatch[2];
+      if (basePath && imgPath.startsWith('./')) {
+        imgPath = basePath + imgPath.slice(2);
+      }
+      currentExercise.steps.push({
+        id: ++stepId,
+        type: 'image',
+        color: 'none',
+        text: imgPath,
+        alt: imgMatch[1]
+      });
+      pendingColor = null;
+      continue;
+    }
+
+    // ─── FENCED CODE BLOCKS ─── ```lang ... ``` (each line = one step)
+    const codeStart = line.match(/^```(\w*)/);
+    if (codeStart && currentExercise) {
+      const lang = codeStart[1] || 'python';
+      let j = i + 1;
+      let isFirstCodeLine = true;
+      while (j < lines.length && !lines[j].match(/^```\s*$/)) {
+        const codeLine = lines[j];
+        const color = pendingColor || 'black';
+        currentExercise.steps.push({
+          id: ++stepId,
+          type: isFirstCodeLine ? 'code-line-first' : 'code-line',
+          color,
+          text: codeLine,
+          lang
+        });
+        isFirstCodeLine = false;
+        j++;
+      }
+      // Mark last code line
+      if (currentExercise.steps.length > 0) {
+        const lastStep = currentExercise.steps[currentExercise.steps.length - 1];
+        if (lastStep.type === 'code-line' || lastStep.type === 'code-line-first') {
+          lastStep.isLast = true;
+        }
+      }
+      i = j; // skip closing ```
+      pendingColor = null;
+      continue;
+    }
+
+    // ─── SECTION HEADER (## ...) — Exercise, Part, Concept, etc. ───
+    const exHeader = line.match(/^## (.+)/);
     if (exHeader) {
       stepId = 0;
       currentExercise = { id: 'ex' + (exercises.length + 1), title: exHeader[1], steps: [] };

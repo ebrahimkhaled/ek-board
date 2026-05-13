@@ -9,53 +9,43 @@ import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate, isPenA
 import { initPresenter } from './presenter.js';
 import { saveProgressToCloud, loadProgressFromCloud } from './firebase.js';
 
-// ─── CHAPTER REGISTRY ───
-// Add new chapters here. Each file must be in public/data/
-const chapters = [
+// ─── SUBJECT & CHAPTER REGISTRY ───
+// Subjects group chapters into courses. Each file must be in public/data/
+const subjects = [
   {
-    id: 'ch1',
-    title: 'Chapter 1: Linear Algebra & Inner Products',
-    file: './data/ch1/Ch1_Exercises_SOLVED.md'
+    id: 'stats-ai',
+    name: 'Statistics for AI',
+    icon: '📊',
+    chapters: [
+      { id: 'ch1', title: 'Chapter 1: Linear Algebra & Inner Products', file: './data/ch1/Ch1_Exercises_SOLVED.md' },
+      { id: 'ch2', title: 'Chapter 2: Multivariate Calculus', file: './data/ch2/Ch2_Exercises_SOLVED.md' },
+      { id: 'ch3', title: 'Chapter 3: Gradient Descent & SGD', file: './data/ch3/Ch3_Exercises_SOLVED.md' },
+      { id: 'ch4', title: 'Chapter 4: Convexity & Convergence', file: './data/ch4/Ch4_Exercises_SOLVED.md' },
+      { id: 'ch5', title: 'Chapter 5: Statistical Learning', file: './data/ch5/Ch5_Exercises_SOLVED.md' },
+      { id: 'ch6', title: 'Chapter 6: Kernels & Gaussian Processes', file: './data/ch6/Ch6_Exercises_SOLVED.md' },
+      { id: 'ch7', title: 'Chapter 7: DNNs, Diffusion & LLMs', file: './data/ch7/Ch7_Exercises_SOLVED.md' },
+      { id: 'ch8', title: 'Chapter 8: Reinforcement Learning', file: './data/ch8/Ch8_Exercises_SOLVED.md' },
+    ]
   },
   {
-    id: 'ch2',
-    title: 'Chapter 2: Multivariate Calculus',
-    file: './data/ch2/Ch2_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch3',
-    title: 'Chapter 3: Gradient Descent & SGD',
-    file: './data/ch3/Ch3_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch4',
-    title: 'Chapter 4: Convexity & Convergence',
-    file: './data/ch4/Ch4_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch5',
-    title: 'Chapter 5: Statistical Learning',
-    file: './data/ch5/Ch5_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch6',
-    title: 'Chapter 6: Kernels & Gaussian Processes',
-    file: './data/ch6/Ch6_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch7',
-    title: 'Chapter 7: DNNs, Diffusion & LLMs',
-    file: './data/ch7/Ch7_Exercises_SOLVED.md'
-  },
-  {
-    id: 'ch8',
-    title: 'Chapter 8: Reinforcement Learning',
-    file: './data/ch8/Ch8_Exercises_SOLVED.md'
-  },
+    id: 'deep-learning',
+    name: 'Deep Learning',
+    icon: '🧠',
+    chapters: [
+      { id: 'ssd', title: 'SSD — Single Shot Multibox Detection', file: './data/ssd/SSD_Walkthrough.md' },
+    ]
+  }
 ];
+
+// Helper: get flat chapters list for the active subject
+function getActiveChapters() {
+  const subj = subjects.find(s => s.id === state.activeSubjectId);
+  return subj ? subj.chapters : [];
+}
 
 // ─── STATE ───
 const state = {
+  activeSubjectId: localStorage.getItem('ekboard-subject') || subjects[0].id,
   chaptersData: {},       // { ch1: parsedChapterObj, ch2: ... }
   currentChapterId: null,
   currentExerciseId: null,
@@ -67,15 +57,30 @@ const state = {
 async function init() {
   // Load progress from cloud (or localStorage fallback)
   state.progress = await loadProgress();
+  buildSubjectSelector();
   buildChapterNav();
 
   // Try to restore from URL hash
   const route = parseHash();
   if (route.chapterId) {
+    // Auto-detect which subject this chapter belongs to
+    for (const subj of subjects) {
+      if (subj.chapters.some(c => c.id === route.chapterId)) {
+        if (subj.id !== state.activeSubjectId) {
+          state.activeSubjectId = subj.id;
+          localStorage.setItem('ekboard-subject', subj.id);
+          // Rebuild tabs and nav for the correct subject
+          buildSubjectSelector();
+          buildChapterNav();
+        }
+        break;
+      }
+    }
     await loadChapter(route.chapterId, route.exerciseId);
   } else {
-    // Default: first chapter, first exercise
-    await loadChapter(chapters[0].id);
+    // Default: first chapter of active subject
+    const chapters = getActiveChapters();
+    if (chapters.length) await loadChapter(chapters[0].id);
   }
 
   // Init annotation engine AFTER first exercise is loaded
@@ -104,8 +109,12 @@ function setHash(chapterId, exerciseId) {
 }
 
 function getChapterTitle(chId) {
-  const ch = chapters.find(c => c.id === chId);
-  return ch ? ch.title : 'EK-Board';
+  // Search all subjects for the chapter
+  for (const subj of subjects) {
+    const ch = subj.chapters.find(c => c.id === chId);
+    if (ch) return ch.title;
+  }
+  return 'EK-Board';
 }
 
 // Listen for hash changes (back/forward browser buttons)
@@ -118,11 +127,57 @@ window.addEventListener('hashchange', async () => {
   }
 });
 
+// ─── BUILD SUBJECT SELECTOR ───
+function buildSubjectSelector() {
+  const nav = document.getElementById('exerciseNav');
+  const header = nav.querySelector('.nav-header');
+
+  // Remove existing tabs if re-building
+  const existing = nav.querySelector('.subject-tabs');
+  if (existing) existing.remove();
+
+  const tabsContainer = document.createElement('div');
+  tabsContainer.className = 'subject-tabs';
+
+  subjects.forEach(subj => {
+    const tab = document.createElement('button');
+    tab.className = 'subject-tab' + (subj.id === state.activeSubjectId ? ' active' : '');
+    tab.innerHTML = `<span class="subject-icon">${subj.icon}</span>${subj.name}`;
+    tab.addEventListener('click', () => switchSubject(subj.id));
+    tabsContainer.appendChild(tab);
+  });
+
+  // Insert after header
+  header.after(tabsContainer);
+}
+
+// ─── SWITCH SUBJECT ───
+function switchSubject(subjectId, rebuild = true) {
+  state.activeSubjectId = subjectId;
+  localStorage.setItem('ekboard-subject', subjectId);
+
+  // Update tab active state
+  document.querySelectorAll('.subject-tab').forEach(tab => {
+    const idx = Array.from(tab.parentNode.children).indexOf(tab);
+    tab.classList.toggle('active', subjects[idx].id === subjectId);
+  });
+
+  if (rebuild) {
+    buildChapterNav();
+    // Load first chapter of new subject
+    const chapters = getActiveChapters();
+    if (chapters.length) {
+      loadChapter(chapters[0].id);
+    }
+  }
+}
+
 // ─── BUILD CHAPTER NAV ───
 function buildChapterNav() {
   const container = document.getElementById('navChapters');
   container.innerHTML = '';
 
+  const chapters = getActiveChapters();
   chapters.forEach(ch => {
     // Chapter accordion header
     const chGroup = document.createElement('div');
@@ -162,14 +217,21 @@ function buildChapterNav() {
 
 // ─── LOAD CHAPTER ───
 async function loadChapter(chapterId, exerciseId = null) {
-  const chDef = chapters.find(c => c.id === chapterId);
+  // Search all subjects for the chapter definition
+  let chDef = null;
+  for (const subj of subjects) {
+    chDef = subj.chapters.find(c => c.id === chapterId);
+    if (chDef) break;
+  }
   if (!chDef) return;
 
   // Parse if not cached
   if (!state.chaptersData[chapterId]) {
     const resp = await fetch(chDef.file);
     const md = await resp.text();
-    state.chaptersData[chapterId] = parseMD(md, chDef.title);
+    // Extract base directory path for resolving relative image paths
+    const basePath = chDef.file.substring(0, chDef.file.lastIndexOf('/') + 1);
+    state.chaptersData[chapterId] = parseMD(md, chDef.title, basePath);
   }
 
   state.currentChapterId = chapterId;
