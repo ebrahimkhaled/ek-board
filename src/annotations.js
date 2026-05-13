@@ -955,6 +955,7 @@ export async function onExerciseChange() {
   currentExerciseHash = window.location.hash || '#default';
   strokes = [];
   redoStack = [];
+  cacheValid = false; // Fix: invalidate cache so old exercise strokes don't bleed over
 
   // Re-create canvas (renderExercise wipes notebook innerHTML)
   if (notebook) {
