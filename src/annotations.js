@@ -80,6 +80,30 @@ function applySettings() {
   }
 }
 
+// ─── PERFORMANCE HELPERS ───
+// Reduce point count by keeping every Nth point (preserves first and last)
+function decimatePoints(pts, factor) {
+  if (pts.length <= 10) return pts;
+  const result = [pts[0]];
+  for (let i = factor; i < pts.length - 1; i += factor) {
+    result.push(pts[i]);
+  }
+  result.push(pts[pts.length - 1]);
+  return result;
+}
+
+// Compute axis-aligned bounding box for a stroke's points
+function computeBBox(pts) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
 // ─── STATE ───
 let canvas = null;
 let ctx = null;
@@ -255,25 +279,21 @@ export function initAnnotations(notebookEl) {
 // ─── RENDER LOOP (rAF batched) ───
 let lastDrawBox = null;
 
+// Incremental bounding box for active stroke — avoids re-scanning all points each frame
+let activeBBox = null;
+
 function renderLoop() {
   if (needsRedraw) {
     needsRedraw = false;
     
     if (curStroke && curStroke.pts.length >= 2) {
-      // Calculate dirty rectangle (bounding box) of the active stroke
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (let p of curStroke.pts) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-      }
+      // Use incrementally-maintained bounding box (updated in onPointerMove)
       const pad = curStroke.size * 5 + 10;
       const box = {
-        x: Math.floor(minX - pad),
-        y: Math.floor(minY - pad),
-        w: Math.ceil(maxX - minX + pad * 2),
-        h: Math.ceil(maxY - minY + pad * 2)
+        x: Math.floor((activeBBox?.minX ?? 0) - pad),
+        y: Math.floor((activeBBox?.minY ?? 0) - pad),
+        w: Math.ceil(((activeBBox?.maxX ?? 0) - (activeBBox?.minX ?? 0)) + pad * 2),
+        h: Math.ceil(((activeBBox?.maxY ?? 0) - (activeBBox?.minY ?? 0)) + pad * 2)
       };
       
       // Combine with previous frame's box to ensure we clear the tail
@@ -403,6 +423,8 @@ function onPointerDown(e) {
   }
 
   // PEN / HIGHLIGHTER: start new stroke
+  // Reset incremental bounding box
+  activeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y };
   curStroke = {
     tool: tool,
     color: penColor,
@@ -435,7 +457,15 @@ function onPointerMove(e) {
   // Use getCoalescedEvents() for extra points between frames (smoother strokes)
   const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   for (const ce of events) {
-    curStroke.pts.push(getPos(ce));
+    const pt = getPos(ce);
+    curStroke.pts.push(pt);
+    // Incrementally expand bounding box (O(1) per point instead of O(n) per frame)
+    if (activeBBox) {
+      if (pt.x < activeBBox.minX) activeBBox.minX = pt.x;
+      if (pt.x > activeBBox.maxX) activeBBox.maxX = pt.x;
+      if (pt.y < activeBBox.minY) activeBBox.minY = pt.y;
+      if (pt.y > activeBBox.maxY) activeBBox.maxY = pt.y;
+    }
   }
 
   // Schedule redraw via rAF (don't draw directly in event handler)
@@ -457,25 +487,48 @@ function onPointerUp(e) {
   drawing = false;
   
   if (curStroke && curStroke.pts.length >= 2) {
+    // Decimate long strokes to save memory and speed up future redraws
+    if (curStroke.pts.length > 500) {
+      curStroke.pts = decimatePoints(curStroke.pts, 2);
+    }
+    // Pre-compute bounding box for fast eraser rejection
+    curStroke._bbox = computeBBox(curStroke.pts);
     strokes.push(curStroke);
     // Render completed stroke to offscreen cache for performance
     bakeStrokeToCache(curStroke);
   }
   curStroke = null;
+  activeBBox = null;
   scheduleRedraw();
   saveAnnotations();
 }
 
 // ─── WHOLE-STROKE ERASER ───
+// Performance: use bounding-box pre-check to skip strokes that are far away,
+// and throttle cache rebuilds so rapid erasing doesn't trigger 60 full redraws/sec.
+let eraseNeedsRebuild = false;
+let eraseRebuildTimer = null;
+
 function eraseStrokeAt(pt) {
   const radius = penSize * 5;
   const radiusSq = radius * radius;
   let erased = false;
   for (let i = strokes.length - 1; i >= 0; i--) {
     const stroke = strokes[i];
-    for (const sp of stroke.pts) {
-      const dx = sp.x - pt.x;
-      const dy = sp.y - pt.y;
+    // Fast bounding-box rejection — skip strokes that can't possibly intersect
+    if (stroke._bbox) {
+      const b = stroke._bbox;
+      if (pt.x < b.minX - radius || pt.x > b.maxX + radius ||
+          pt.y < b.minY - radius || pt.y > b.maxY + radius) {
+        continue;
+      }
+    }
+    // Sample every Nth point for large strokes (still accurate within radius)
+    const pts = stroke.pts;
+    const step = pts.length > 200 ? 3 : 1;
+    for (let j = 0; j < pts.length; j += step) {
+      const dx = pts[j].x - pt.x;
+      const dy = pts[j].y - pt.y;
       if (dx * dx + dy * dy < radiusSq) {
         redoStack.push(strokes.splice(i, 1)[0]);
         erased = true;
@@ -484,10 +537,20 @@ function eraseStrokeAt(pt) {
     }
   }
   if (erased) {
-    cacheValid = false;  // Invalidate cache
-    scheduleRedraw();
-    // Intentionally omitted saveAnnotations() here to prevent main thread blocking
-    // during high-frequency pointermove dragging. It is handled by onPointerUp.
+    eraseNeedsRebuild = true;
+    // Throttled cache rebuild: wait 150ms of inactivity before expensive redraw
+    // This batches rapid erase gestures into a single rebuild instead of one per stroke
+    clearTimeout(eraseRebuildTimer);
+    eraseRebuildTimer = setTimeout(() => {
+      if (eraseNeedsRebuild) {
+        eraseNeedsRebuild = false;
+        cacheValid = false;
+        scheduleRedraw();
+      }
+    }, 150);
+    // Immediate visual feedback: just clear & redraw from the stale cache minus erased
+    // (the throttled rebuild will fix the cache shortly)
+    needsRedraw = true;
   }
 }
 
@@ -861,9 +924,11 @@ export function clearAnnotations() {
   saveToCloud(key, []).then(ok => showSyncStatus(ok ? 'saved' : 'error'));
 }
 
-// ─── PERSISTENCE (localStorage instant + Firestore every 60s) ───
+// ─── PERSISTENCE (localStorage instant + Firestore debounced) ───
 let saveTimer = null;
 let hasPendingCloudSave = false;
+let lastLocalSaveTime = 0;
+const LOCAL_SAVE_THROTTLE = 2000; // Don't serialize to localStorage more than every 2s
 
 function getStorageKey() {
   const hash = currentExerciseHash || window.location.hash || '#default';
@@ -875,21 +940,63 @@ function getLocalKey() {
 }
 
 function saveAnnotations() {
-  const data = JSON.stringify(strokes);
-  // 1. Instant localStorage save
-  try { localStorage.setItem(getLocalKey(), data); } catch {}
+  // 1. Throttled localStorage save (avoid JSON.stringify on every pen-up)
+  const now = Date.now();
+  if (now - lastLocalSaveTime > LOCAL_SAVE_THROTTLE) {
+    lastLocalSaveTime = now;
+    try {
+      const data = JSON.stringify(stripBBoxForSave(strokes));
+      localStorage.setItem(getLocalKey(), data);
+    } catch {}
+  } else {
+    // Schedule a deferred localStorage save so we don't lose the last stroke
+    setTimeout(() => {
+      try {
+        const data = JSON.stringify(stripBBoxForSave(strokes));
+        localStorage.setItem(getLocalKey(), data);
+      } catch {}
+    }, LOCAL_SAVE_THROTTLE);
+  }
   // 2. Debounced Firestore save (every 60 seconds)
   hasPendingCloudSave = true;
   if (!saveTimer) {
-    saveTimer = setTimeout(async () => {
+    saveTimer = setTimeout(() => {
       saveTimer = null;
-      if (hasPendingCloudSave) {
-        hasPendingCloudSave = false;
-        const key = getStorageKey();
-        const ok = await saveToCloud(key, strokes);
-        showSyncStatus(ok ? 'saved' : 'error');
-      }
+      doCloudSave();
     }, 60000);
+  }
+}
+
+// Strip internal _bbox metadata before serializing to save space
+function stripBBoxForSave(data) {
+  return data.map(s => {
+    if (!s._bbox) return s;
+    const { _bbox, ...rest } = s;
+    return rest;
+  });
+}
+
+// Actual cloud save with size guard and retry
+async function doCloudSave() {
+  if (!hasPendingCloudSave) return;
+  hasPendingCloudSave = false;
+  const key = getStorageKey();
+  const saveData = stripBBoxForSave(strokes);
+  
+  // Guard: Firestore doc limit is ~1MB. If data is too large, decimate further.
+  let dataStr = JSON.stringify(saveData);
+  if (dataStr.length > 900000) {
+    // Aggressively decimate point arrays to fit within Firestore limit
+    const trimmed = saveData.map(s => ({
+      ...s,
+      pts: s.pts.length > 100 ? decimatePoints(s.pts, 3) : s.pts
+    }));
+    dataStr = JSON.stringify(trimmed);
+    const ok = await saveToCloud(key, trimmed);
+    showSyncStatus(ok ? 'saved' : 'error');
+  } else {
+    const ok = await saveToCloud(key, saveData);
+    showSyncStatus(ok ? 'saved' : 'error');
   }
 }
 
@@ -900,7 +1007,10 @@ export async function flushToCloud() {
     clearTimeout(saveTimer);
     saveTimer = null;
     const key = getStorageKey();
-    await saveToCloud(key, strokes);
+    // Fire-and-forget: don't block exercise switch on network
+    saveToCloud(key, stripBBoxForSave(strokes))
+      .then(ok => showSyncStatus(ok ? 'saved' : 'error'))
+      .catch(() => showSyncStatus('error'));
   }
 }
 
@@ -912,27 +1022,29 @@ async function loadAnnotations() {
     const local = localStorage.getItem(localKey);
     if (local) {
       strokes = JSON.parse(local);
-      cacheValid = false;  // Invalidate cache
+      // Rehydrate bounding boxes for eraser performance
+      strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
+      cacheValid = false;
       scheduleRedraw();
     }
   } catch {}
 
-  // 2. Sync with cloud (may have newer data from another device)
-  try {
-    const key = getStorageKey();
-    const cloudData = await loadFromCloud(key);
+  // 2. Sync with cloud in background (don't block UI)
+  const key = getStorageKey();
+  loadFromCloud(key).then(cloudData => {
     if (cloudData && cloudData.length > 0) {
       strokes = cloudData;
-      try { localStorage.setItem(localKey, JSON.stringify(strokes)); } catch {}
+      strokes.forEach(s => { s._bbox = computeBBox(s.pts); });
+      try { localStorage.setItem(localKey, JSON.stringify(stripBBoxForSave(strokes))); } catch {}
       showSyncStatus('loaded');
-      cacheValid = false;  // Invalidate cache
+      cacheValid = false;
       scheduleRedraw();
     } else if (strokes.length > 0) {
       showSyncStatus('local');
     }
-  } catch {
-    // Cloud failed — localStorage data already loaded
-  }
+  }).catch(() => {
+    // Cloud failed — localStorage data already loaded, no interruption
+  });
 }
 
 function showSyncStatus(status) {
@@ -951,11 +1063,13 @@ function showSyncStatus(status) {
 
 // ─── EXERCISE CHANGE ───
 export async function onExerciseChange() {
-  await flushToCloud();
+  // Fire-and-forget cloud flush — don't block the exercise switch!
+  flushToCloud();
   currentExerciseHash = window.location.hash || '#default';
   strokes = [];
   redoStack = [];
-  cacheValid = false; // Fix: invalidate cache so old exercise strokes don't bleed over
+  cacheValid = false;
+  activeBBox = null;
 
   // Re-create canvas (renderExercise wipes notebook innerHTML)
   if (notebook) {
@@ -976,7 +1090,8 @@ export async function onExerciseChange() {
     resizeCanvas();
   }
 
-  await loadAnnotations();
+  // Load annotations (cloud sync happens in background, doesn't block)
+  loadAnnotations();
 }
 
 // ─── KEYBOARD ───
