@@ -292,8 +292,8 @@ export function initAnnotations(notebookEl) {
   // ensuring strokes begin immediately with zero latency.
   document.addEventListener('touchstart', (e) => {
     if (e.touches && e.touches[0] && e.touches[0].touchType === 'stylus') {
-      // Allow clicking on UI elements (toolbar, buttons, lasso action bar) with the Apple Pencil
-      if (e.target.closest('.ann-toolbar') || e.target.closest('button') || e.target.closest('input') || e.target.closest('#lassoActionBar') || e.target.closest('#lassoColorPicker')) {
+      // Allow clicking on UI elements (toolbar, settings bar, buttons, lasso action bar) with the Apple Pencil
+      if (e.target.closest('.ann-toolbar') || e.target.closest('.ann-settings-bar') || e.target.closest('button') || e.target.closest('input') || e.target.closest('#lassoActionBar') || e.target.closest('#lassoColorPicker')) {
         return; 
       }
       e.preventDefault();
@@ -1323,11 +1323,11 @@ function onKey(e) {
 
 // ─── BUILD TOOLBAR ───
 function buildToolbar() {
+  // ═══ MAIN TOOLBAR (right side) — tool selection only ═══
   const toolbar = document.createElement('div');
   toolbar.className = 'ann-toolbar';
   toolbar.id = 'annToolbar';
 
-  // Tool buttons (laser is now always-visible floating dot, not a tool)
   const tools = [
     { id: 'pen', icon: '✏️', title: 'Pen' },
     { id: 'hl', icon: '🖍️', title: 'Highlighter' },
@@ -1347,7 +1347,6 @@ function buildToolbar() {
       if (t.id === 'eye') {
         toggleVisibility();
       } else {
-        // Toggle: click same tool = deactivate (none), click different = activate
         const newTool = tool === t.id ? 'none' : t.id;
         setAnnotationTool(newTool);
       }
@@ -1355,6 +1354,12 @@ function buildToolbar() {
     toolbar.appendChild(btn);
   });
 
+  document.body.appendChild(toolbar);
+
+  // ═══ SETTINGS TOOLBAR (left side) — colors, sizes, text scale ═══
+  const settingsBar = document.createElement('div');
+  settingsBar.className = 'ann-settings-bar';
+  settingsBar.id = 'annSettingsBar';
 
   // Color dots
   const penColors = [
@@ -1375,16 +1380,16 @@ function buildToolbar() {
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
       penColor = c.color;
-      toolbar.querySelectorAll('.ann-color-dot').forEach(d => d.classList.remove('active'));
+      settingsBar.querySelectorAll('.ann-color-dot').forEach(d => d.classList.remove('active'));
       dot.classList.add('active');
       updateCursor();
     });
-    toolbar.appendChild(dot);
+    settingsBar.appendChild(dot);
   });
 
-  toolbar.appendChild(makeDivider());
+  settingsBar.appendChild(makeDivider());
 
-  // Size slider
+  // Brush size slider
   const slider = document.createElement('input');
   slider.type = 'range';
   slider.min = '1';
@@ -1404,16 +1409,16 @@ function buildToolbar() {
     updateCursor(); 
   });
   slider.addEventListener('click', (e) => e.stopPropagation());
-  toolbar.appendChild(slider);
+  settingsBar.appendChild(slider);
 
-  toolbar.appendChild(makeDivider());
+  settingsBar.appendChild(makeDivider());
 
-  // Text Scale UI (Aa button + Slider)
+  // Text Scale (Aa + slider)
   const textScaleBtn = document.createElement('button');
   textScaleBtn.className = 'ann-tool-btn';
   textScaleBtn.textContent = 'Aa';
   textScaleBtn.title = 'Text Size';
-  toolbar.appendChild(textScaleBtn);
+  settingsBar.appendChild(textScaleBtn);
   
   const textScaleContainer = document.createElement('div');
   textScaleContainer.style.display = 'none';
@@ -1434,13 +1439,12 @@ function buildToolbar() {
     document.documentElement.style.setProperty('--text-scale', val);
     globalSettings.textScale = val;
     saveSettings();
-    // Let the browser reflow CSS, then fix canvas sizes so drawings stay aligned
     setTimeout(resizeCanvas, 50);
   });
   textSlider.addEventListener('click', (e) => e.stopPropagation());
   
   textScaleContainer.appendChild(textSlider);
-  toolbar.appendChild(textScaleContainer);
+  settingsBar.appendChild(textScaleContainer);
   
   textScaleBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1448,27 +1452,35 @@ function buildToolbar() {
     textScaleContainer.style.display = isVis ? 'none' : 'flex';
   });
 
-  // Clear button
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'ann-tool-btn ann-clear';
-  clearBtn.textContent = '🗑️';
-  clearBtn.title = 'Clear All';
-  clearBtn.addEventListener('click', (e) => { e.stopPropagation(); clearAnnotations(); });
-  toolbar.appendChild(clearBtn);
+  document.body.appendChild(settingsBar);
 
-  // Debug toggle button
-  const debugBtn = document.createElement('button');
-  debugBtn.className = 'ann-tool-btn';
-  debugBtn.textContent = '🔍';
-  debugBtn.title = 'Debug: Show Input Type';
-  debugBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const on = toggleDebug();
-    debugBtn.classList.toggle('active', on);
-  });
-  toolbar.appendChild(debugBtn);
+  // ═══ BOTTOM BAR ADDITIONS (🗑️ clear + 🔍 debug) ═══
+  const bottomRight = document.querySelector('.controls-bar .controls-keys');
+  if (bottomRight) {
+    bottomRight.innerHTML = ''; // Remove old keyboard shortcuts
+    bottomRight.className = 'controls-actions';
+    bottomRight.style.display = 'flex';
+    bottomRight.style.gap = '6px';
+    bottomRight.style.alignItems = 'center';
 
-  document.body.appendChild(toolbar);
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn btn-undo';
+    clearBtn.textContent = '🗑️';
+    clearBtn.title = 'Clear All Annotations';
+    clearBtn.addEventListener('click', (e) => { e.stopPropagation(); clearAnnotations(); });
+    bottomRight.appendChild(clearBtn);
+
+    const debugBtn = document.createElement('button');
+    debugBtn.className = 'btn btn-undo';
+    debugBtn.textContent = '🔍';
+    debugBtn.title = 'Debug: Show Input Type';
+    debugBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const on = toggleDebug();
+      debugBtn.classList.toggle('active', on);
+    });
+    bottomRight.appendChild(debugBtn);
+  }
 }
 
 function makeDivider() {

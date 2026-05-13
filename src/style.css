@@ -732,6 +732,24 @@ body {
   box-shadow: 0 8px 32px rgba(0,0,0,0.4);
 }
 
+.ann-settings-bar {
+  position: fixed;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  z-index: 150;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(13, 148, 136, 0.15);
+  border-radius: 14px;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
 .ann-tool-btn {
   width: 36px;
   height: 36px;
@@ -885,6 +903,18 @@ body.fullscreen-mode {
     top: auto;
     bottom: 70px;
     right: 8px;
+    transform: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    border-radius: 12px;
+    max-width: 90vw;
+    gap: 2px;
+  }
+  .ann-settings-bar {
+    top: auto;
+    bottom: 130px;
+    left: 8px;
     transform: none;
     flex-direction: row;
     flex-wrap: wrap;
