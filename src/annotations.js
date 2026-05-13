@@ -406,7 +406,7 @@ function onPointerDown(e) {
   curStroke = {
     tool: tool,
     color: penColor,
-    size: penSize,
+    size: tool === 'hl' ? hlSize : penSize,
     pts: [p]
   };
 }
