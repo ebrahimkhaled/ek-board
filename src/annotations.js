@@ -443,21 +443,20 @@ function resizeCanvas() {
 }
 
 // ─── COORDINATES ───
-// Maps visual (screen) coordinates → canvas CSS coordinates.
-// Accounts for both CSS zoom AND iPad browser pinch-to-zoom (visualViewport.scale).
+// Maps screen coordinates → canvas CSS-pixel coordinates.
+// Uses normalized 0..1 position for zoom-proof accuracy:
+//   (clientX - rect.left) / rect.width → always correct regardless of
+//   CSS zoom, CSS transform, browser pinch-zoom, or visual viewport scale.
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
-  
-  // rect.width is the screen width (affected by CSS zoom).
-  // We map it to the CSS pixel width (notebook.scrollWidth)
-  const cssWidth = notebook.scrollWidth;
-  const cssHeight = notebook.scrollHeight;
-  const scaleX = cssWidth / rect.width;
-  const scaleY = cssHeight / rect.height;
-  
+  const dpr = window.devicePixelRatio || 1;
+  // Normalized position (0..1) within the element
+  const nx = (e.clientX - rect.left) / rect.width;
+  const ny = (e.clientY - rect.top) / rect.height;
+  // Map to canvas CSS-pixel coordinate space
   return {
-    x: Math.round((e.clientX - rect.left) * scaleX * 10) / 10,
-    y: Math.round((e.clientY - rect.top) * scaleY * 10) / 10,
+    x: Math.round(nx * (canvas.width / dpr) * 10) / 10,
+    y: Math.round(ny * (canvas.height / dpr) * 10) / 10,
     p: Math.round((e.pressure || 0.5) * 100) / 100
   };
 }
@@ -597,20 +596,16 @@ function onPointerUp(e) {
   curStroke = null;
   activeBBox = null;
   scheduleRedraw();
-  // Flush any pending erase rebuild before saving
-  if (eraseNeedsRebuild) {
-    eraseNeedsRebuild = false;
-    clearTimeout(eraseRebuildTimer);
-    cacheValid = false;
-  }
   saveAnnotations();
 }
 
 // ─── WHOLE-STROKE ERASER ───
-// Performance: use bounding-box pre-check to skip strokes that are far away,
-// and throttle cache rebuilds so rapid erasing doesn't trigger 60 full redraws/sec.
-let eraseNeedsRebuild = false;
+// Performance: use bounding-box pre-check to skip strokes that are far away.
+// Two-tier throttle:
+//   1. Lightweight direct redraw: once per animation frame (16ms)
+//   2. Expensive cache rebuild: debounced 200ms after erasing stops
 let eraseRebuildTimer = null;
+let eraseRedrawScheduled = false;
 
 function eraseStrokeAt(pt) {
   const radius = penSize * 5;
@@ -640,21 +635,25 @@ function eraseStrokeAt(pt) {
     }
   }
   if (erased) {
-    eraseNeedsRebuild = true;
-    // Throttled cache rebuild: wait 150ms of inactivity before expensive redraw
-    // This batches rapid erase gestures into a single rebuild instead of one per stroke
+    // Tier 1: Lightweight immediate redraw (once per animation frame)
+    // Draws all remaining strokes directly — fast with cached _outlines
+    if (!eraseRedrawScheduled) {
+      eraseRedrawScheduled = true;
+      requestAnimationFrame(() => {
+        eraseRedrawScheduled = false;
+        if (!ctx || !canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        strokes.forEach(s => drawStroke(s, ctx));
+      });
+    }
+    // Tier 2: Expensive cache rebuild, debounced 200ms after erasing stops
     clearTimeout(eraseRebuildTimer);
     eraseRebuildTimer = setTimeout(() => {
-      if (eraseNeedsRebuild) {
-        eraseNeedsRebuild = false;
-        cacheValid = false;
-        scheduleRedraw();
-      }
-    }, 150);
-    // Immediate visual feedback: invalidate cache and schedule redraw
-    // Without this, the erased stroke stays visible until the 150ms timer fires
-    cacheValid = false;
-    scheduleRedraw();
+      cacheValid = false;
+      rebuildCache();
+      scheduleRedraw();
+    }, 200);
   }
 }
 

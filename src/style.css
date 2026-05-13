@@ -103,16 +103,16 @@ body {
 /* Hide scrollbar */
 .notebook::-webkit-scrollbar { width: 0; }
 
-/* Spiral holes */
+/* Spiral holes — use min-height:100% so they extend to full scrollable content */
 .notebook::after {
   content: '';
   position: absolute;
   top: 0;
   left: 16px;
-  bottom: 0;
   width: 36px;
+  min-height: 100%;
   background-image: radial-gradient(circle 7px, var(--desk-bg) 100%, transparent 100%);
-  background-size: 36px 64px;
+  background-size: 36px calc(64px * var(--text-scale, 1));
   background-position: center 16px;
   z-index: 2;
   pointer-events: none;
