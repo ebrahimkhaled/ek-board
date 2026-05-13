@@ -597,6 +597,12 @@ function onPointerUp(e) {
   curStroke = null;
   activeBBox = null;
   scheduleRedraw();
+  // Flush any pending erase rebuild before saving
+  if (eraseNeedsRebuild) {
+    eraseNeedsRebuild = false;
+    clearTimeout(eraseRebuildTimer);
+    cacheValid = false;
+  }
   saveAnnotations();
 }
 
@@ -645,9 +651,10 @@ function eraseStrokeAt(pt) {
         scheduleRedraw();
       }
     }, 150);
-    // Immediate visual feedback: just clear & redraw from the stale cache minus erased
-    // (the throttled rebuild will fix the cache shortly)
-    needsRedraw = true;
+    // Immediate visual feedback: invalidate cache and schedule redraw
+    // Without this, the erased stroke stays visible until the 150ms timer fires
+    cacheValid = false;
+    scheduleRedraw();
   }
 }
 
