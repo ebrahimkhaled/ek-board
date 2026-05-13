@@ -819,13 +819,13 @@ body {
 
 /* Size slider */
 .ann-size-slider {
-  width: 28px;
-  writing-mode: vertical-lr;
-  direction: rtl;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  width: 60px;
+  height: auto;
   accent-color: #0d9488;
   cursor: pointer;
-  margin: 4px 0;
-  height: 60px;
+  margin: 0 2px;
 }
 
 /* ═══ CLOUD SYNC INDICATOR ═══ */
