@@ -5,7 +5,7 @@
 import './style.css';
 import { parseMD, getExerciseById } from './parser.js';
 import { renderExercise, StepController } from './notebook.js';
-import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate, isPenActive } from './annotations.js';
+import { initAnnotations, onExerciseChange, isToolActive, shouldNavigate, isPenActive, undoAnnotation, redoAnnotation } from './annotations.js';
 import { initPresenter } from './presenter.js';
 import { saveProgressToCloud, loadProgressFromCloud } from './firebase.js';
 
@@ -484,6 +484,15 @@ document.getElementById('menuToggle').addEventListener('click', (e) => {
 document.getElementById('btnMenu').addEventListener('click', (e) => {
   e.stopPropagation();
   document.getElementById('exerciseNav').classList.toggle('open');
+});
+// Bottom-bar undo/redo buttons
+document.getElementById('btnUndo').addEventListener('click', (e) => {
+  e.stopPropagation();
+  undoAnnotation();
+});
+document.getElementById('btnRedo').addEventListener('click', (e) => {
+  e.stopPropagation();
+  redoAnnotation();
 });
 
 // Click outside nav to close

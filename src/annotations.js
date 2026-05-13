@@ -1321,24 +1321,6 @@ function buildToolbar() {
     toolbar.appendChild(btn);
   });
 
-  toolbar.appendChild(makeDivider());
-
-  // Undo/Redo
-  const undoBtn = document.createElement('button');
-  undoBtn.className = 'ann-tool-btn';
-  undoBtn.textContent = '↩️';
-  undoBtn.title = 'Undo (Ctrl+Z)';
-  undoBtn.addEventListener('click', (e) => { e.stopPropagation(); undoAnnotation(); });
-  toolbar.appendChild(undoBtn);
-
-  const redoBtn = document.createElement('button');
-  redoBtn.className = 'ann-tool-btn';
-  redoBtn.textContent = '↪️';
-  redoBtn.title = 'Redo (Ctrl+Y)';
-  redoBtn.addEventListener('click', (e) => { e.stopPropagation(); redoAnnotation(); });
-  toolbar.appendChild(redoBtn);
-
-  toolbar.appendChild(makeDivider());
 
   // Color dots
   const penColors = [

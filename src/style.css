@@ -610,6 +610,13 @@ body {
   border-color: #0d9488;
   background: rgba(13, 148, 136, 0.12);
 }
+.controls-bar .btn-undo,
+.controls-bar .btn-redo {
+  padding: 4px 6px;
+  font-size: 1rem;
+  line-height: 1;
+  min-width: 28px;
+}
 
 /* Exercise label in controls */
 .exercise-label {
