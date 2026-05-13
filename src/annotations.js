@@ -1528,8 +1528,10 @@ function onLassoMove(pt) {
       if (lassoDrag.corner.includes('l')) sx = Math.max(0.1, 1 - (pt.x - lassoDrag.startX) / hw);
       if (lassoDrag.corner.includes('b')) sy = Math.max(0.1, 1 + (pt.y - lassoDrag.startY) / hh);
       if (lassoDrag.corner.includes('t')) sy = Math.max(0.1, 1 - (pt.y - lassoDrag.startY) / hh);
+      const avgScale = (sx + sy) / 2;
       for (const s of lassoSelectedStrokes) {
         for (const p of s.pts) { p.x = cx + (p.x - cx) * sx; p.y = cy + (p.y - cy) * sy; }
+        s.size = Math.max(0.5, s.size * avgScale);
         s._bbox = computeBBox(s.pts);
         s._outline = null;
       }
