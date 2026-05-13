@@ -4,6 +4,7 @@
  */
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { compressToUTF16, decompressFromUTF16 } from 'lz-string';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDF3UvN4zKUkmBBXFGBjQOiGGPy5IQSeu8",
@@ -19,12 +20,16 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ─── SAVE ANNOTATIONS TO FIRESTORE ───
-// Path: ekboard/{exerciseKey} → { strokes, updatedAt }
+// Path: ekboard/{exerciseKey} → { strokes (compressed), updatedAt }
 export async function saveToCloud(exerciseKey, strokes) {
   try {
     const docRef = doc(db, 'ekboard', exerciseKey);
+    // Compress stroke JSON with lz-string (~85% size reduction)
+    const raw = JSON.stringify(strokes);
+    const compressed = compressToUTF16(raw);
     await setDoc(docRef, {
-      strokes: JSON.stringify(strokes),
+      strokes: compressed,
+      compressed: true,
       updatedAt: new Date().toISOString()
     });
     return true;
@@ -35,15 +40,22 @@ export async function saveToCloud(exerciseKey, strokes) {
 }
 
 // ─── LOAD ANNOTATIONS FROM FIRESTORE ───
+// Backward-compatible: detects old uncompressed format
 export async function loadFromCloud(exerciseKey) {
   try {
     const docRef = doc(db, 'ekboard', exerciseKey);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const data = snap.data();
+      if (data.compressed) {
+        // New format: decompress
+        const raw = decompressFromUTF16(data.strokes);
+        return JSON.parse(raw || '[]');
+      }
+      // Legacy format: raw JSON string
       return JSON.parse(data.strokes || '[]');
     }
-    return null; // No cloud data
+    return null;
   } catch (err) {
     console.warn('[EK-Board] Cloud load failed:', err.message);
     return null;
