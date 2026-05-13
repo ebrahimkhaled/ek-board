@@ -353,6 +353,30 @@ export function initAnnotations(notebookEl) {
   // Init compute worker
   initWorker();
 
+  // ── DESK SCROLL FORWARDING ──
+  // When user touches the brown desk area (body, outside the notebook paper),
+  // forward the scroll gesture to the notebook so the paper scrolls naturally.
+  let deskScrollY = null;
+  document.body.addEventListener('touchstart', (e) => {
+    // Only activate if touch lands on the desk (body), NOT on notebook or toolbar
+    const t = e.target;
+    if (t === document.body || (!t.closest('.notebook') && !t.closest('.ann-toolbar') && !t.closest('.exercise-nav'))) {
+      deskScrollY = e.touches[0].clientY;
+    }
+  }, { passive: true });
+
+  document.body.addEventListener('touchmove', (e) => {
+    if (deskScrollY !== null && notebook) {
+      const dy = deskScrollY - e.touches[0].clientY;
+      notebook.scrollTop += dy;
+      deskScrollY = e.touches[0].clientY;
+      e.preventDefault(); // prevent body from scrolling
+    }
+  }, { passive: false });
+
+  document.body.addEventListener('touchend', () => { deskScrollY = null; });
+  document.body.addEventListener('touchcancel', () => { deskScrollY = null; });
+
   // Start render loop
   requestAnimationFrame(renderLoop);
 }
