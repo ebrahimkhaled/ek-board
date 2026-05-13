@@ -24,6 +24,20 @@ import { getStroke } from 'perfect-freehand';
 import { saveToCloud, loadFromCloud, saveSettingsToCloud, loadSettingsFromCloud } from './firebase.js';
 import { saveToIDB, loadFromIDB } from './idb-storage.js';
 
+// ─── MODULAR TOOLS ───
+import penTool from './annotations/tools/pen.js';
+import eraserTool from './annotations/tools/eraser.js';
+import lassoTool from './annotations/tools/lasso.js';
+import spacerTool from './annotations/tools/spacer.js';
+
+const toolRegistry = {
+  pen: penTool,
+  hl: penTool,       // Highlighter uses same handlers as pen
+  eraser: eraserTool,
+  lasso: lassoTool,
+  spacer: spacerTool,
+};
+
 // ─── GLOBAL SETTINGS SYNC ───
 export let globalSettings = {
   penSize: 3,
@@ -234,7 +248,7 @@ export function shouldNavigate(pointerType) {
   if (penActive) return false;                // Pen is touching — block everything
   if (pointerType === 'touch') return true;   // Finger ALWAYS navigates
   // Mouse: navigates only if no drawing tool is active
-  return !(tool === 'pen' || tool === 'hl' || tool === 'eraser' || tool === 'lasso');
+  return !(tool === 'pen' || tool === 'hl' || tool === 'eraser' || tool === 'lasso' || tool === 'spacer');
 }
 
 // Check if pen is currently touching (for main.js safety check)
@@ -242,6 +256,38 @@ export function isPenActive() { return penActive; }
 
 // Called to get current tool (for main.js)
 export function getCurrentTool() { return tool; }
+
+// ─── ENGINE CONTEXT (bridge for modular tools) ───
+function getEngineContext() {
+  return {
+    get strokes() { return strokes; },
+    get redoStack() { return redoStack; },
+    set redoStack(v) { redoStack = v; },
+    get curStroke() { return curStroke; },
+    set curStroke(v) { curStroke = v; },
+    get activeBBox() { return activeBBox; },
+    set activeBBox(v) { activeBBox = v; },
+    get drawing() { return drawing; },
+    set drawing(v) { drawing = v; },
+    get penColor() { return penColor; },
+    get penSize() { return penSize; },
+    get hlSize() { return hlSize; },
+    get tool() { return tool; },
+    get canvas() { return canvas; },
+    get ctx() { return ctx; },
+    get notebook() { return notebook; },
+    scheduleRedraw,
+    saveAnnotations,
+    invalidateCache() { cacheValid = false; },
+    bakeStrokeToCache,
+    computeBBox,
+    computeOutline,
+    decimatePoints,
+    eraseLocalArea,
+    rebuildCache() { cacheValid = false; scheduleRedraw(); },
+    resizeCanvas,
+  };
+}
 
 // ─── INIT ───
 export function initAnnotations(notebookEl) {
@@ -433,8 +479,9 @@ function renderLoop() {
       lastDrawBox = null;
       redrawAll();
     }
-    // Lasso overlay (drawn on top of everything)
-    if (tool === 'lasso') drawLassoOverlay(ctx);
+    // Tool overlay (lasso selection box, spacer indicator, etc.)
+    const activeTool = toolRegistry[tool];
+    if (activeTool && activeTool.drawOverlay) activeTool.drawOverlay(ctx);
   }
   requestAnimationFrame(renderLoop);
 }
@@ -495,20 +542,20 @@ function getPos(e) {
 const MIN_POINT_DIST_SQ = 4; // 2px minimum gap
 
 // ─── INPUT DISCRIMINATION ───
-// Determines if this pointer should draw based on type and tool state
 function shouldDraw(pointerType) {
   if (tool === 'none' || tool === 'laser') return false;
   if (pointerType === 'touch') return false;
   if (pointerType === 'pen') return true;
-  return tool === 'pen' || tool === 'hl' || tool === 'eraser' || tool === 'lasso';
+  return !!toolRegistry[tool]; // Any registered tool
 }
 
-// ─── POINTER EVENTS ───
+// ─── POINTER EVENTS (dispatch to modular tools) ───
 function onPointerDown(e) {
   // ── FINGER: deselect lasso if tapping, otherwise let it scroll ──
   if (e.pointerType === 'touch') {
-    if (tool === 'lasso' && lassoSelectedStrokes.size > 0) {
-      clearLassoSelection();
+    const activeTool = toolRegistry[tool];
+    if (activeTool && activeTool.hasSelection && activeTool.hasSelection()) {
+      activeTool.clearSelection(getEngineContext());
     }
     return;
   }
@@ -518,49 +565,23 @@ function onPointerDown(e) {
     setAnnotationTool(lastDrawTool || 'pen');
   }
 
-  // Should this pointer draw?
   if (!shouldDraw(e.pointerType)) return;
 
-  // CLAIM this pointer — prevents scroll/zoom for pen & mouse
   e.preventDefault();
   e.stopPropagation();
 
-  // NOTE: Pen double-tap for eraser toggle is handled via Apple Pencil's
-  // hardware double-tap event, not via timing. Timing-based detection
-  // was causing writing lag (every 2nd fast stroke triggered eraser toggle).
-
   const p = getPos(e);
   drawing = true;
-  redoStack = [];
 
-  // ERASER: whole-stroke deletion
-  if (tool === 'eraser') {
-    eraseStrokeAt(p);
-    return;
+  // Dispatch to active tool
+  const activeTool = toolRegistry[tool];
+  if (activeTool && activeTool.onDown) {
+    activeTool.onDown(p, getEngineContext());
   }
-
-  // LASSO: selection tool
-  if (tool === 'lasso') {
-    onLassoDown(p);
-    return;
-  }
-
-  // PEN / HIGHLIGHTER: start new stroke
-  // Reset incremental bounding box
-  activeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y };
-  curStroke = {
-    tool: tool,
-    color: penColor,
-    size: tool === 'hl' ? hlSize : penSize,
-    pts: [p]
-  };
 }
 
 function onPointerMove(e) {
-  // Update floating cursor position (even when drawing — stopPropagation blocks global handler)
   updateCursorPosition(e);
-
-  // Finger: always ignore
   if (e.pointerType === 'touch') return;
   if (!drawing) return;
   if (!shouldDraw(e.pointerType)) return;
@@ -568,82 +589,37 @@ function onPointerMove(e) {
   e.preventDefault();
   e.stopPropagation();
 
-  // ERASER: keep deleting strokes as we drag
-  if (tool === 'eraser') {
-    const p = getPos(e);
-    eraseStrokeAt(p);
-    return;
-  }
-
-  // LASSO: drag/draw
-  if (tool === 'lasso') {
-    onLassoMove(getPos(e));
-    return;
-  }
-
-  if (!curStroke) return;
-
-  // Use getCoalescedEvents() for extra points between frames (smoother strokes)
-  const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-  for (const ce of events) {
-    const pt = getPos(ce);
-    // Minimum distance filter: skip points too close to the last one
-    // This caps point count at ~1 per 2px of movement, preventing runaway growth on long strokes
-    const lastPt = curStroke.pts[curStroke.pts.length - 1];
-    const dx = pt.x - lastPt.x;
-    const dy = pt.y - lastPt.y;
-    if (dx * dx + dy * dy < MIN_POINT_DIST_SQ) continue;
-    
-    curStroke.pts.push(pt);
-    // Incrementally expand bounding box (O(1) per point instead of O(n) per frame)
-    if (activeBBox) {
-      if (pt.x < activeBBox.minX) activeBBox.minX = pt.x;
-      if (pt.x > activeBBox.maxX) activeBBox.maxX = pt.x;
-      if (pt.y < activeBBox.minY) activeBBox.minY = pt.y;
-      if (pt.y > activeBBox.maxY) activeBBox.maxY = pt.y;
+  const p = getPos(e);
+  const activeTool = toolRegistry[tool];
+  if (activeTool && activeTool.onMove) {
+    // For pen/hl, pass coalesced events for smooth strokes
+    if (tool === 'pen' || tool === 'hl') {
+      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+      const pts = events.map(ce => getPos(ce));
+      activeTool.onMove(p, getEngineContext(), pts.map(pt => ({ pt })));
+    } else {
+      activeTool.onMove(p, getEngineContext());
     }
   }
-
-  // Schedule redraw via rAF (don't draw directly in event handler)
-  scheduleRedraw();
 }
 
 function onPointerUp(e) {
   if (e.pointerType === 'touch') return;
   
-  // Pen: always prevent + stop (also done at document capture level as safety)
   if (e.pointerType === 'pen') {
     e.preventDefault();
     e.stopPropagation();
-    // Hide cursor circle when pen is lifted/leaves screen
     if (cursorEl) cursorEl.style.display = 'none';
   }
   
   if (!drawing) return;
   drawing = false;
-  
-  // LASSO: finish selection
-  if (tool === 'lasso') {
-    onLassoUp(getPos(e));
-    drawing = false;
-    return;
-  }
 
-  if (curStroke && curStroke.pts.length >= 2) {
-    if (curStroke.pts.length > 500) {
-      curStroke.pts = decimatePoints(curStroke.pts, 2);
-    }
-    curStroke._bbox = computeBBox(curStroke.pts);
-    if (curStroke.tool !== 'hl') {
-      curStroke._outline = computeOutline(curStroke);
-    }
-    strokes.push(curStroke);
-    bakeStrokeToCache(curStroke);
+  const p = getPos(e);
+  const activeTool = toolRegistry[tool];
+  if (activeTool && activeTool.onUp) {
+    activeTool.onUp(p, getEngineContext());
   }
-  curStroke = null;
-  activeBBox = null;
-  scheduleRedraw();
-  saveAnnotations();
 }
 
 // ─── WHOLE-STROKE ERASER ───
@@ -652,52 +628,7 @@ function onPointerUp(e) {
 //   2. On erase: ONLY redraw the small area around the erased stroke (O(k), k = overlapping strokes)
 //   3. Full cache rebuild debounced to 300ms after erasing stops (cleanup)
 // This makes erasing feel instant even with 500+ strokes.
-let eraseRebuildTimer = null;
-
-function eraseStrokeAt(pt) {
-  const radius = penSize * 5;
-  const radiusSq = radius * radius;
-  let erasedStroke = null;
-  for (let i = strokes.length - 1; i >= 0; i--) {
-    const stroke = strokes[i];
-    // Fast bounding-box rejection
-    if (stroke._bbox) {
-      const b = stroke._bbox;
-      if (pt.x < b.minX - radius || pt.x > b.maxX + radius ||
-          pt.y < b.minY - radius || pt.y > b.maxY + radius) {
-        continue;
-      }
-    }
-    // Point-level hit test (sample every Nth point for large strokes)
-    const pts = stroke.pts;
-    const step = pts.length > 200 ? 3 : 1;
-    for (let j = 0; j < pts.length; j += step) {
-      const dx = pts[j].x - pt.x;
-      const dy = pts[j].y - pt.y;
-      if (dx * dx + dy * dy < radiusSq) {
-        erasedStroke = strokes.splice(i, 1)[0];
-        redoStack.push(erasedStroke);
-        break;
-      }
-    }
-    if (erasedStroke) break;
-  }
-  if (erasedStroke) {
-    // LOCAL-AREA REDRAW: only repaint the bbox of the erased stroke
-    // Instead of clearing + redrawing ALL strokes (slow), we:
-    //   1. Clear just the erased stroke's area on both cache and screen
-    //   2. Clip to that area and redraw only overlapping strokes
-    eraseLocalArea(erasedStroke);
-
-    // Full cache rebuild debounced (cleanup for edge cases like overlapping composites)
-    clearTimeout(eraseRebuildTimer);
-    eraseRebuildTimer = setTimeout(() => {
-      cacheValid = false;
-      rebuildCache();
-      scheduleRedraw();
-    }, 300);
-  }
-}
+// (eraseStrokeAt logic moved to tools/eraser.js)
 
 // Redraw ONLY the area occupied by the erased stroke — O(k) not O(n)
 function eraseLocalArea(erasedStroke) {
@@ -1016,14 +947,15 @@ function drawStroke(s, cx) {
 
 // ─── TOOL MANAGEMENT ───
 export function setAnnotationTool(t) {
+  // Deactivate previous tool
+  const prevTool = toolRegistry[tool];
+  if (prevTool && prevTool.onDeactivate && tool !== t) {
+    prevTool.onDeactivate(getEngineContext());
+  }
   tool = t;
   // Track last drawing tool for pen auto-activation
   if (t === 'pen' || t === 'hl' || t === 'eraser') {
     lastDrawTool = t;
-  }
-  // Clear lasso selection when switching away from lasso
-  if (tool === 'lasso' && t !== 'lasso') {
-    clearLassoSelection();
   }
   // Update brush size slider based on tool
   const brushSlider = document.querySelector('.ann-size-slider[title="Brush Size"]');
@@ -1078,6 +1010,14 @@ function updateCursor() {
       background: 'rgba(59,130,246,0.1)',
       border: '2px dashed #3b82f6',
       boxShadow: 'none',
+    });
+  } else if (tool === 'spacer') {
+    Object.assign(cursorEl.style, {
+      width: '32px', height: '4px',
+      borderRadius: '2px',
+      background: '#f59e0b',
+      border: 'none',
+      boxShadow: '0 0 8px rgba(245,158,11,0.5)',
     });
   } else {
     // Pen / Highlighter
@@ -1333,6 +1273,7 @@ function buildToolbar() {
     { id: 'hl', icon: '🖍️', title: 'Highlighter' },
     { id: 'eraser', icon: '🧹', title: 'Eraser (or double-tap pen)' },
     { id: 'lasso', icon: '✂️', title: 'Lasso Select' },
+    { id: 'spacer', icon: '↕️', title: 'Insert Space' },
     { id: 'eye', icon: '👁️', title: 'Toggle Annotations' },
   ];
 
@@ -1385,6 +1326,48 @@ function buildToolbar() {
       updateCursor();
     });
     settingsBar.appendChild(dot);
+  });
+
+  settingsBar.appendChild(makeDivider());
+
+  // ── Circle size presets (tap for instant size) ──
+  const sizePresets = [
+    { size: 1, label: 'XS' },
+    { size: 3, label: 'S' },
+    { size: 6, label: 'M' },
+    { size: 10, label: 'L' },
+    { size: 15, label: 'XL' },
+  ];
+  sizePresets.forEach(sp => {
+    const circle = document.createElement('div');
+    circle.className = 'ann-size-preset';
+    const displaySize = Math.max(6, sp.size * 2);
+    Object.assign(circle.style, {
+      width: displaySize + 'px', height: displaySize + 'px',
+      borderRadius: '50%', background: '#94a3b8',
+      cursor: 'pointer', border: sp.size === 3 ? '2px solid #3b82f6' : '2px solid transparent',
+      flexShrink: '0',
+    });
+    circle.title = sp.label + ' (' + sp.size + ')';
+    circle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (tool === 'hl') {
+        hlSize = sp.size;
+        globalSettings.hlSize = sp.size;
+      } else {
+        penSize = sp.size;
+        globalSettings.penSize = sp.size;
+      }
+      saveSettings();
+      updateCursor();
+      // Update slider to match
+      const sl = document.querySelector('.ann-size-slider[title="Brush Size"]');
+      if (sl) sl.value = sp.size;
+      // Highlight active preset
+      settingsBar.querySelectorAll('.ann-size-preset').forEach(c => c.style.borderColor = 'transparent');
+      circle.style.borderColor = '#3b82f6';
+    });
+    settingsBar.appendChild(circle);
   });
 
   settingsBar.appendChild(makeDivider());
@@ -1489,341 +1472,14 @@ function makeDivider() {
   return d;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ─── LASSO SELECTION TOOL ───
-// Intersection-based: lasso path only needs to TOUCH a stroke to select it.
-// Selected strokes get a blue-gray overlay + resize handles.
-// ═══════════════════════════════════════════════════════════════════════════
-let lassoSelectedStrokes = new Set();
-let lassoPath = [];
-let isDrawingLasso = false;
-let lassoActionBar = null;
-let lassoDrag = null; // { type:'move'|'resize', startX, startY, corner?, origBox? }
+// (Lasso selection logic moved to tools/lasso.js)
 
-function onLassoDown(pt) {
-  // If clicking on resize handle
-  const handle = getLassoResizeHandle(pt);
-  if (handle) {
-    lassoDrag = { type: 'resize', corner: handle, startX: pt.x, startY: pt.y, origBox: getLassoSelectionBBox() };
-    return;
-  }
-  // If clicking inside existing selection → move
-  if (lassoSelectedStrokes.size > 0 && isInsideLassoSelection(pt)) {
-    lassoDrag = { type: 'move', startX: pt.x, startY: pt.y };
-    return;
-  }
-  // Clear previous selection, start new lasso
-  clearLassoSelection();
-  lassoPath = [pt];
-  isDrawingLasso = true;
-}
 
-function onLassoMove(pt) {
-  if (lassoDrag) {
-    if (lassoDrag.type === 'move') {
-      const dx = pt.x - lassoDrag.startX, dy = pt.y - lassoDrag.startY;
-      for (const s of lassoSelectedStrokes) {
-        for (const p of s.pts) { p.x += dx; p.y += dy; }
-        if (s._bbox) { s._bbox.minX += dx; s._bbox.minY += dy; s._bbox.maxX += dx; s._bbox.maxY += dy; }
-        s._outline = null;
-      }
-      lassoDrag.startX = pt.x;
-      lassoDrag.startY = pt.y;
-      cacheValid = false;
-      scheduleRedraw();
-    } else if (lassoDrag.type === 'resize') {
-      const ob = lassoDrag.origBox;
-      const cx = (ob.minX + ob.maxX) / 2, cy = (ob.minY + ob.maxY) / 2;
-      const hw = Math.max((ob.maxX - ob.minX) / 2, 1), hh = Math.max((ob.maxY - ob.minY) / 2, 1);
-      let sx = 1, sy = 1;
-      if (lassoDrag.corner.includes('r')) sx = Math.max(0.1, 1 + (pt.x - lassoDrag.startX) / hw);
-      if (lassoDrag.corner.includes('l')) sx = Math.max(0.1, 1 - (pt.x - lassoDrag.startX) / hw);
-      if (lassoDrag.corner.includes('b')) sy = Math.max(0.1, 1 + (pt.y - lassoDrag.startY) / hh);
-      if (lassoDrag.corner.includes('t')) sy = Math.max(0.1, 1 - (pt.y - lassoDrag.startY) / hh);
-      const avgScale = (sx + sy) / 2;
-      for (const s of lassoSelectedStrokes) {
-        for (const p of s.pts) { p.x = cx + (p.x - cx) * sx; p.y = cy + (p.y - cy) * sy; }
-        s.size = Math.max(0.5, s.size * avgScale);
-        s._bbox = computeBBox(s.pts);
-        s._outline = null;
-      }
-      lassoDrag.startX = pt.x; lassoDrag.startY = pt.y;
-      lassoDrag.origBox = getLassoSelectionBBox();
-      cacheValid = false;
-      scheduleRedraw();
-    }
-    return;
-  }
-  if (!isDrawingLasso) return;
-  lassoPath.push(pt);
-  scheduleRedraw();
-}
 
-function onLassoUp(pt) {
-  if (lassoDrag) {
-    lassoDrag = null;
-    saveAnnotations();
-    cacheValid = false;
-    scheduleRedraw();
-    updateLassoActionBar();
-    return;
-  }
-  if (!isDrawingLasso) return;
-  isDrawingLasso = false;
-  if (lassoPath.length < 3) { lassoPath = []; return; }
-  // Find strokes intersecting the lasso path
-  const RADIUS_SQ = 225; // 15px touch radius
-  for (const stroke of strokes) {
-    if (strokeIntersectsLassoPath(stroke, lassoPath, RADIUS_SQ)) {
-      lassoSelectedStrokes.add(stroke);
-    }
-  }
-  lassoPath = [];
-  if (lassoSelectedStrokes.size > 0) {
-    updateLassoActionBar();
-  }
-  scheduleRedraw();
-}
 
-function strokeIntersectsLassoPath(stroke, path, radiusSq) {
-  const step = stroke.pts.length > 100 ? 3 : 1;
-  for (let i = 0; i < stroke.pts.length; i += step) {
-    const sp = stroke.pts[i];
-    for (let j = 0; j < path.length - 1; j++) {
-      if (ptToSegDistSq(sp, path[j], path[j+1]) < radiusSq) return true;
-    }
-  }
-  return false;
-}
 
-function ptToSegDistSq(p, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
-  let t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
-  return (p.x - (a.x + t * dx)) ** 2 + (p.y - (a.y + t * dy)) ** 2;
-}
 
-function getLassoSelectionBBox() {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const s of lassoSelectedStrokes) {
-    if (s._bbox) {
-      if (s._bbox.minX < minX) minX = s._bbox.minX;
-      if (s._bbox.minY < minY) minY = s._bbox.minY;
-      if (s._bbox.maxX > maxX) maxX = s._bbox.maxX;
-      if (s._bbox.maxY > maxY) maxY = s._bbox.maxY;
-    }
-  }
-  return { minX, minY, maxX, maxY };
-}
 
-function isInsideLassoSelection(pt) {
-  if (lassoSelectedStrokes.size === 0) return false;
-  const b = getLassoSelectionBBox();
-  return pt.x >= b.minX - 10 && pt.x <= b.maxX + 10 && pt.y >= b.minY - 10 && pt.y <= b.maxY + 10;
-}
-
-const LASSO_HANDLE = 12;
-function getLassoResizeHandle(pt) {
-  if (lassoSelectedStrokes.size === 0) return null;
-  const b = getLassoSelectionBBox();
-  const pad = 8;
-  const corners = [
-    { name: 'tl', x: b.minX - pad, y: b.minY - pad },
-    { name: 'tr', x: b.maxX + pad, y: b.minY - pad },
-    { name: 'bl', x: b.minX - pad, y: b.maxY + pad },
-    { name: 'br', x: b.maxX + pad, y: b.maxY + pad },
-  ];
-  for (const c of corners) {
-    if (Math.abs(pt.x - c.x) < LASSO_HANDLE && Math.abs(pt.y - c.y) < LASSO_HANDLE) return c.name;
-  }
-  return null;
-}
-
-// ── LASSO OVERLAY RENDERING ──
-function drawLassoOverlay(cx) {
-  // Lasso path preview
-  if (isDrawingLasso && lassoPath.length > 1) {
-    cx.save();
-    cx.strokeStyle = '#3b82f6';
-    cx.lineWidth = 2;
-    cx.setLineDash([6, 4]);
-    cx.globalAlpha = 0.8;
-    cx.beginPath();
-    cx.moveTo(lassoPath[0].x, lassoPath[0].y);
-    for (let i = 1; i < lassoPath.length; i++) cx.lineTo(lassoPath[i].x, lassoPath[i].y);
-    cx.stroke();
-    cx.restore();
-  }
-  // Selection overlay
-  if (lassoSelectedStrokes.size > 0) {
-    const b = getLassoSelectionBBox();
-    const pad = 8;
-    cx.save();
-    // Blue-gray frosted overlay
-    cx.fillStyle = 'rgba(100, 140, 180, 0.12)';
-    cx.fillRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
-    // Dashed border
-    cx.strokeStyle = '#3b82f6';
-    cx.lineWidth = 1.5;
-    cx.setLineDash([6, 4]);
-    cx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
-    cx.setLineDash([]);
-    // Corner handles
-    const corners = [
-      { x: b.minX - pad, y: b.minY - pad }, { x: b.maxX + pad, y: b.minY - pad },
-      { x: b.minX - pad, y: b.maxY + pad }, { x: b.maxX + pad, y: b.maxY + pad },
-    ];
-    corners.forEach(c => {
-      cx.fillStyle = '#ffffff';
-      cx.strokeStyle = '#3b82f6';
-      cx.lineWidth = 2;
-      cx.beginPath();
-      cx.arc(c.x, c.y, 5, 0, Math.PI * 2);
-      cx.fill();
-      cx.stroke();
-    });
-    cx.restore();
-  }
-}
-
-// ── LASSO ACTIONS ──
-function lassoCopy() {
-  const newStrokes = [];
-  for (const s of lassoSelectedStrokes) {
-    const clone = JSON.parse(JSON.stringify({ tool: s.tool, color: s.color, size: s.size, pts: s.pts }));
-    clone.pts.forEach(p => { p.x += 20; p.y += 20; });
-    clone._bbox = computeBBox(clone.pts);
-    newStrokes.push(clone);
-  }
-  newStrokes.forEach(s => strokes.push(s));
-  lassoSelectedStrokes = new Set(newStrokes);
-  cacheValid = false;
-  scheduleRedraw();
-  saveAnnotations();
-  updateLassoActionBar();
-}
-
-function lassoRecolor(color) {
-  for (const s of lassoSelectedStrokes) { s.color = color; s._outline = null; }
-  cacheValid = false;
-  scheduleRedraw();
-  saveAnnotations();
-}
-
-function lassoDelete() {
-  for (const s of lassoSelectedStrokes) {
-    const idx = strokes.indexOf(s);
-    if (idx !== -1) strokes.splice(idx, 1);
-  }
-  clearLassoSelection();
-  cacheValid = false;
-  scheduleRedraw();
-  saveAnnotations();
-}
-
-function clearLassoSelection() {
-  lassoSelectedStrokes.clear();
-  lassoPath = [];
-  isDrawingLasso = false;
-  lassoDrag = null;
-  removeLassoActionBar();
-  scheduleRedraw();
-}
-
-// ── LASSO ACTION BAR UI ──
-function updateLassoActionBar() {
-  removeLassoActionBar();
-  if (lassoSelectedStrokes.size === 0) return;
-  
-  const b = getLassoSelectionBBox();
-  lassoActionBar = document.createElement('div');
-  lassoActionBar.id = 'lassoActionBar';
-  Object.assign(lassoActionBar.style, {
-    position: 'fixed',
-    display: 'flex',
-    gap: '4px',
-    padding: '6px 8px',
-    borderRadius: '10px',
-    background: 'rgba(30, 41, 59, 0.95)',
-    backdropFilter: 'blur(8px)',
-    border: '1px solid rgba(59, 130, 246, 0.3)',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-    zIndex: '200',
-    pointerEvents: 'auto',
-  });
-  
-  // Position above selection
-  if (canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const cw = canvas.width / dpr, ch = canvas.height / dpr;
-    const sx = rect.left + (b.minX / cw) * rect.width;
-    const sy = rect.top + (b.minY / ch) * rect.height - 52;
-    lassoActionBar.style.left = Math.max(10, sx) + 'px';
-    lassoActionBar.style.top = Math.max(10, sy) + 'px';
-  }
-  
-  const actions = [
-    { icon: '📋', title: 'Copy', fn: lassoCopy },
-    { icon: '🎨', title: 'Recolor', fn: () => showLassoColorPicker() },
-    { icon: '🗑️', title: 'Delete', fn: lassoDelete },
-  ];
-  
-  actions.forEach(a => {
-    const btn = document.createElement('button');
-    Object.assign(btn.style, {
-      background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px',
-      color: '#e2e8f0', padding: '4px 8px', cursor: 'pointer', fontSize: '1.1rem',
-    });
-    btn.textContent = a.icon;
-    btn.title = a.title;
-    btn.addEventListener('click', (e) => { e.stopPropagation(); a.fn(); });
-    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    lassoActionBar.appendChild(btn);
-  });
-  
-  document.body.appendChild(lassoActionBar);
-}
-
-function showLassoColorPicker() {
-  const colors = ['#c41e3a', '#1a5276', '#1a1a1a', '#1e8449', '#f59e0b'];
-  const picker = document.createElement('div');
-  picker.id = 'lassoColorPicker';
-  Object.assign(picker.style, {
-    position: 'fixed', display: 'flex', gap: '6px', padding: '6px 8px',
-    borderRadius: '10px', background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(8px)',
-    border: '1px solid rgba(59, 130, 246, 0.3)', zIndex: '201',
-  });
-  if (lassoActionBar) {
-    const r = lassoActionBar.getBoundingClientRect();
-    picker.style.left = r.left + 'px';
-    picker.style.top = (r.bottom + 4) + 'px';
-  }
-  colors.forEach(c => {
-    const dot = document.createElement('div');
-    Object.assign(dot.style, {
-      width: '22px', height: '22px', borderRadius: '50%', background: c,
-      cursor: 'pointer', border: '2px solid rgba(255,255,255,0.2)',
-    });
-    dot.addEventListener('click', (e) => { e.stopPropagation(); lassoRecolor(c); picker.remove(); });
-    dot.addEventListener('pointerdown', (e) => e.stopPropagation());
-    picker.appendChild(dot);
-  });
-  document.body.appendChild(picker);
-  setTimeout(() => {
-    document.addEventListener('pointerdown', function handler() {
-      picker.remove();
-      document.removeEventListener('pointerdown', handler);
-    }, { once: true });
-  }, 100);
-}
-
-function removeLassoActionBar() {
-  if (lassoActionBar) { lassoActionBar.remove(); lassoActionBar = null; }
-  const picker = document.getElementById('lassoColorPicker');
-  if (picker) picker.remove();
-}
 
 // ─── DEBUG INPUT INDICATOR ───
 let debugEl = null;
