@@ -79,11 +79,9 @@ body {
     -2px -2px 8px rgba(0,0,0,0.05),
     inset 0 0 80px rgba(0,0,0,0.02);
 
-  /* Grid lines + RED MARGIN LINE + SPIRAL HOLES (all in background for full scroll coverage) */
+  /* Grid lines + RED MARGIN LINE */
   background-image:
-    /* Spiral holes — punched through the paper */
-    radial-gradient(circle 7px at 34px 50%, var(--desk-bg) 100%, transparent 100%),
-    /* Red margin line — extends full content height because it's in background */
+    /* Red margin line */
     linear-gradient(90deg,
       transparent 67px, var(--margin-red) 67px,
       var(--margin-red) 69px, transparent 69px),
@@ -95,23 +93,30 @@ body {
     repeating-linear-gradient(90deg,
       transparent, transparent calc(var(--grid-size) - 1px),
       var(--grid-color) calc(var(--grid-size) - 1px), var(--grid-color) var(--grid-size));
-  background-size:
-    36px calc(64px * var(--text-scale, 1)),
-    100% 100%,
-    var(--grid-size) var(--grid-size),
-    var(--grid-size) var(--grid-size);
-  background-position:
-    16px 16px,
-    0 0,
-    0 20px,
-    0 20px;
+  background-size: 100% 100%, var(--grid-size) var(--grid-size), var(--grid-size) var(--grid-size);
+  background-position: 0 0, 0 20px, 0 20px;
   background-color: var(--paper-bg);
-  /* CRITICAL: 'local' makes ALL layers (grid + holes) scroll WITH the content */
+  /* 'local' makes the grid scroll WITH the content */
   background-attachment: local;
 }
 
 /* Hide scrollbar */
 .notebook::-webkit-scrollbar { width: 0; }
+
+/* Spiral holes — height driven by JS via --scroll-height to extend full scrollable content */
+.notebook::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  width: 36px;
+  height: var(--scroll-height, 100%);
+  background-image: radial-gradient(circle 7px, var(--desk-bg) 100%, transparent 100%);
+  background-size: 36px calc(64px * var(--text-scale, 1));
+  background-position: center 16px;
+  z-index: 2;
+  pointer-events: none;
+}
 
 /* ═══ LINE ELEMENTS ═══ */
 .line {
@@ -863,6 +868,7 @@ body.fullscreen-mode {
     padding-left: 60px;
     padding-right: 20px;
   }
+  .notebook::after { left: 6px; width: 28px; }
   .exercise-nav { width: 85vw; }
   .controls-keys { display: none; }
   .exercise-label { max-width: 160px; }

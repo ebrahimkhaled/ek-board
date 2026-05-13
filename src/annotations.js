@@ -424,6 +424,9 @@ function resizeCanvas() {
   const h = notebook.scrollHeight;
   const dpr = window.devicePixelRatio || 1;
   
+  // Update spiral holes height to match full scrollable content
+  notebook.style.setProperty('--scroll-height', h + 'px');
+  
   if (canvas.width === Math.floor(w * dpr) && canvas.height === Math.floor(h * dpr)) return;
   
   canvas.width = Math.floor(w * dpr);
