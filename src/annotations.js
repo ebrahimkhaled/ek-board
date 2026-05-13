@@ -400,8 +400,9 @@ function renderLoop() {
           clearBox.x, clearBox.y, clearBox.w, clearBox.h);
       }
       
-      // Draw the active stroke
-      drawStroke(curStroke, ctx);
+      // Draw the active stroke using DRAFT mode (simple lineTo, zero computation)
+      // The beautiful perfect-freehand outline is computed once at pen-up
+      drawDraftStroke(curStroke, ctx);
       
     } else {
       // Full redraw (stroke finished, undone, erased, etc)
@@ -737,6 +738,43 @@ function onLaserUp(e) {
     laserDot.style.cursor = 'grab';
     laserDot.style.transform = 'scale(1)';
   }
+}
+
+// ─── DRAFT RENDERING (used during active drawing for zero-latency feedback) ───
+// Simple lineTo() path — no getStroke() computation.
+// Pen strokes: thin preview line; Highlighter: same as final.
+// The beautiful pressure-sensitive outline is computed ONCE at pen-up.
+function drawDraftStroke(s, cx) {
+  if (s.pts.length < 2) return;
+  cx.save();
+
+  if (s.tool === 'hl') {
+    // Highlighter draft = same as final (already cheap, no getStroke)
+    drawStroke(s, cx);
+    cx.restore();
+    return;
+  }
+
+  // Pen draft: simple colored line with slight pressure width variation
+  cx.strokeStyle = s.color;
+  cx.lineWidth = s.size * 1.5;
+  cx.lineCap = 'round';
+  cx.lineJoin = 'round';
+  cx.globalAlpha = 0.85;
+  cx.beginPath();
+  cx.moveTo(s.pts[0].x, s.pts[0].y);
+  
+  // Quadratic curves for smoothness (still much cheaper than getStroke)
+  for (let i = 1; i < s.pts.length - 1; i++) {
+    const mx = (s.pts[i].x + s.pts[i + 1].x) / 2;
+    const my = (s.pts[i].y + s.pts[i + 1].y) / 2;
+    cx.quadraticCurveTo(s.pts[i].x, s.pts[i].y, mx, my);
+  }
+  const last = s.pts[s.pts.length - 1];
+  cx.lineTo(last.x, last.y);
+  cx.stroke();
+
+  cx.restore();
 }
 
 // ─── STROKE RENDERING (with offscreen cache for performance) ───
