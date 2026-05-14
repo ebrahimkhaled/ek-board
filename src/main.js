@@ -25,6 +25,7 @@ const subjects = [
       { id: 'ch6', title: 'Chapter 6: Kernels & Gaussian Processes', file: './data/ch6/Ch6_Exercises_SOLVED.md' },
       { id: 'ch7', title: 'Chapter 7: DNNs, Diffusion & LLMs', file: './data/ch7/Ch7_Exercises_SOLVED.md' },
       { id: 'ch8', title: 'Chapter 8: Reinforcement Learning', file: './data/ch8/Ch8_Exercises_SOLVED.md' },
+      { id: 'mock2026', title: '📝 Mock Exam 2026', file: './data/mock2026/MockExam2026_SOLVED.md' },
     ]
   },
   {
