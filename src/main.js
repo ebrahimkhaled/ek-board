@@ -34,6 +34,7 @@ const subjects = [
     icon: '🧠',
     chapters: [
       { id: 'ssd', title: 'SSD — Single Shot Multibox Detection', file: './data/ssd/SSD_Walkthrough.md' },
+      { id: 'rcnn', title: 'R-CNN Family — From Proposals to Masks', file: './data/rcnn/RCNN_Walkthrough.md' },
     ]
   }
 ];
