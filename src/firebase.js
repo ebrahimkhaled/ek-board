@@ -21,12 +21,27 @@ const db = getFirestore(app);
 
 // ─── SAVE ANNOTATIONS TO FIRESTORE ───
 // Path: ekboard/{exerciseKey} → { strokes (compressed), updatedAt }
+// Firestore max doc size: 1 MB. Guard at 800 KB compressed.
+const SIZE_WARN_THRESHOLD = 800 * 1024; // 800 KB
+const SIZE_MAX_THRESHOLD = 950 * 1024;  // 950 KB — refuse to save
+
 export async function saveToCloud(exerciseKey, strokes) {
   try {
     const docRef = doc(db, 'ekboard', exerciseKey);
     // Compress stroke JSON with lz-string (~85% size reduction)
     const raw = JSON.stringify(strokes);
     const compressed = compressToUTF16(raw);
+
+    // Size guard: Firestore has a 1 MB document limit
+    const byteSize = compressed.length * 2; // UTF-16 = 2 bytes per char
+    if (byteSize > SIZE_MAX_THRESHOLD) {
+      console.error(`[EK-Board] ⛔ Cloud save BLOCKED for "${exerciseKey}": ${(byteSize/1024).toFixed(0)} KB exceeds safe limit. Clear old strokes or split.`);
+      return false;
+    }
+    if (byteSize > SIZE_WARN_THRESHOLD) {
+      console.warn(`[EK-Board] ⚠️ Large annotation save for "${exerciseKey}": ${(byteSize/1024).toFixed(0)} KB (limit: 1 MB)`);
+    }
+
     await setDoc(docRef, {
       strokes: compressed,
       compressed: true,
