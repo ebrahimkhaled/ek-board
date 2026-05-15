@@ -1,4 +1,4 @@
-/**
+C:\Users\ebrah\.gemini\Projects\PDFs\Others\advanced-AI\Exam\Mock2026\MockExam2026_QA.tex/**
  * toolbar.js — EK-Board Toolbar Builder
  * Auto-builds toolbar from registered tools array.
  */
